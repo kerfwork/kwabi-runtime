@@ -25,10 +25,10 @@ fn panic_strategy_check() -> proc_macro2::TokenStream {
         #[cfg(panic = "abort")]
         compile_error!(
             "kwabi: this crate must be built with panic=\"unwind\", but is \
-being built with panic=\"abort\". A panic in a guarded body cannot be caught \
-under that profile, so it would abort the PostgreSQL postmaster instead of \
-returning KWABI_ERR_PANICKED. Remove `panic = \"abort\"` from your profile, \
-or set `panic = \"unwind\"` explicitly."
+    being built with panic=\"abort\". A panic in a guarded body cannot be caught \
+    under that profile, so it would abort the PostgreSQL postmaster instead of \
+    returning KWABI_ERR_PANICKED. Remove `panic = \"abort\"` from your profile, \
+    or set `panic = \"unwind\"` explicitly."
         );
     }
 }
