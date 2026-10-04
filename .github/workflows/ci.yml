@@ -21,10 +21,10 @@ jobs:
         run: cargo test
       - name: src/abi.rs matches kwabi.h
         run: |
-          python3 gen_kwabi_struct.py ../kwabi.h > /tmp/kwabi_abi_check.rs
+          python3 gen_kwabi_struct.py vendor/kwabi/kwabi.h > /tmp/kwabi_abi_check.rs
           diff -q /tmp/kwabi_abi_check.rs src/abi.rs
       - name: kwabi.h compiles standalone
-        run: cc -fsyntax-only -Wall -Wextra -x c ../kwabi.h
+        run: cc -fsyntax-only -Wall -Wextra -x c vendor/kwabi/kwabi.h
 
   matrix:
     name: PG ${{ matrix.pg }}
