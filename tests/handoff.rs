@@ -225,7 +225,7 @@ fn table_layout_is_stable() {
 ///
 ///   * `runtime-skeleton/src/abi.rs` — produced from `kwabi.h` by
 ///     `gen_kwabi_struct.py`, so it cannot drift;
-///   * `vendor/kwabi/src/lib.rs` — maintained by hand, because the SDK is the
+///   * `rust-sdk/src/lib.rs` — maintained by hand, because the SDK is the
 ///     artifact an extension links and it must own the types it touches.
 ///
 /// Nothing compared the two, and the hand-written one fell **six appended
@@ -246,7 +246,7 @@ fn sdk_mirror_matches_the_header() {
     // sound, so if this test fails the generator and the SDK disagree and the
     // header is the tie-breaker.
     let generated = include_str!("../src/abi.rs");
-    let sdk = include_str!("../vendor/kwabi/src/lib.rs");
+    let sdk = include_str!("../../rust-sdk/src/lib.rs");
 
     fn field_names(src: &str) -> Vec<String> {
         let start = src
