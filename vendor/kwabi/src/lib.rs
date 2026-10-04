@@ -87,11 +87,19 @@ pub struct KwabiV1 {
     pub call_function3:
         Option<unsafe extern "C" fn(*mut KwabiFmgrInfo, u64, u64, u64, *mut bool, *mut u64) -> i32>,
     // SPI
-    pub spi_execute: extern "C" fn(*const i8, bool, i32) -> *mut KwabiSPIResult,
-    pub spi_execute_plan: extern "C" fn(*mut KwabiSPIPlan, *mut u64, *const i8, bool, i32) -> *mut KwabiSPIResult,
-    pub spi_free_result: extern "C" fn(*mut KwabiSPIResult),
-    pub spi_result_ntuples: extern "C" fn(*mut KwabiSPIResult) -> i32,
-    pub spi_result_get_value: extern "C" fn(*mut KwabiSPIResult, i32, i32) -> u64,
+    //
+    // `Option<unsafe extern "C" fn>`, not a bare pointer: the header's rule is
+    // that every slot starts null and an extension MUST test a slot before
+    // calling it, and a bare function-pointer field cannot express absence.
+    // These five are wired by the per-version shim (they can raise, and the
+    // error firewall forbids a Rust frame between a PG_TRY and a raising call).
+    pub spi_execute: Option<unsafe extern "C" fn(*const i8, bool, i32) -> *mut KwabiSPIResult>,
+    pub spi_execute_plan: Option<
+        unsafe extern "C" fn(*mut KwabiSPIPlan, *mut u64, *const i8, bool, i32) -> *mut KwabiSPIResult,
+    >,
+    pub spi_free_result: Option<unsafe extern "C" fn(*mut KwabiSPIResult)>,
+    pub spi_result_ntuples: Option<unsafe extern "C" fn(*mut KwabiSPIResult) -> i32>,
+    pub spi_result_get_value: Option<unsafe extern "C" fn(*mut KwabiSPIResult, i32, i32) -> u64>,
     // Type system
     pub type_input: extern "C" fn(u32, *const i8, i32) -> u64,
     pub type_output: extern "C" fn(u32, u64) -> *mut i8,
@@ -120,11 +128,16 @@ pub struct KwabiV1 {
     // Replication
     pub logical_decoding_begin: extern "C" fn(u32, i64) -> *mut KwabiLogicalDecodingCtx,
     pub logical_decoding_end: extern "C" fn(*mut KwabiLogicalDecodingCtx),
-    pub logical_decoding_read: extern "C" fn(*mut KwabiLogicalDecodingCtx, *mut i64, *mut *mut std::ffi::c_void) -> bool,
+    pub logical_decoding_read:
+        extern "C" fn(*mut KwabiLogicalDecodingCtx, *mut i64, *mut *mut std::ffi::c_void) -> bool,
     pub output_plugin_startup: extern "C" fn(*mut std::ffi::c_void),
     pub output_plugin_shutdown: extern "C" fn(*mut std::ffi::c_void),
     // Background workers
-    pub bgworker_register: extern "C" fn(*const i8, extern "C" fn(*mut std::ffi::c_void), *mut std::ffi::c_void) -> u32,
+    pub bgworker_register: extern "C" fn(
+        *const i8,
+        extern "C" fn(*mut std::ffi::c_void),
+        *mut std::ffi::c_void,
+    ) -> u32,
     pub bgworker_terminate: extern "C" fn(u32),
     pub bgworker_is_running: extern "C" fn(u32) -> bool,
     // Storage primitives
@@ -166,7 +179,8 @@ pub struct KwabiV1 {
     pub syscache_get_tuple: extern "C" fn(*const i8, u64) -> *mut std::ffi::c_void,
     pub syscache_free_tuple: extern "C" fn(*mut std::ffi::c_void),
     // Optimizer
-    pub planner_info: extern "C" fn(*mut KwabiNode, i32, *mut std::ffi::c_void) -> *mut KwabiPlannerInfo,
+    pub planner_info:
+        extern "C" fn(*mut KwabiNode, i32, *mut std::ffi::c_void) -> *mut KwabiPlannerInfo,
     pub free_planner_info: extern "C" fn(*mut KwabiPlannerInfo),
     pub planner_estimate_rows: extern "C" fn(*mut KwabiPlannerInfo, *mut std::ffi::c_void) -> f64,
     pub planner_estimate_cost: extern "C" fn(*mut KwabiPlannerInfo, *mut std::ffi::c_void) -> f64,
@@ -194,9 +208,15 @@ pub struct KwabiV1 {
     pub walsender_receive: extern "C" fn(*mut i8, i32) -> i32,
     pub walsender_is_connected: extern "C" fn() -> bool,
     // Commands (defrem)
-    pub defrem_create: extern "C" fn(*const i8, *const i8, *const i8),
-    pub defrem_alter: extern "C" fn(*const i8, *const i8),
-    pub defrem_drop: extern "C" fn(*const i8),
+    //
+    // `Option<unsafe extern "C" fn>`, not a bare pointer: the header's rule is
+    // that every slot starts null and an extension MUST test a slot before
+    // calling it, and a bare function-pointer field cannot express absence.
+    // These three are wired by the per-version shim (they can raise, and the
+    // error firewall forbids a Rust frame between a PG_TRY and a raising call).
+    pub defrem_create: Option<unsafe extern "C" fn(*const i8, *const i8, *const i8)>,
+    pub defrem_alter: Option<unsafe extern "C" fn(*const i8, *const i8)>,
+    pub defrem_drop: Option<unsafe extern "C" fn(*const i8)>,
     // Node trees
     pub node_type: extern "C" fn(*mut KwabiNode) -> u32,
     pub node_type_name: extern "C" fn(*mut KwabiNode) -> *const i8,
@@ -227,7 +247,8 @@ pub struct KwabiV1 {
     pub tuple_attname: extern "C" fn(*mut std::ffi::c_void, i32) -> *const i8,
     pub tuple_attisdropped: extern "C" fn(*mut std::ffi::c_void, i32) -> bool,
     pub tuple_attnum: extern "C" fn(*mut std::ffi::c_void, *const i8) -> i32,
-    pub heap_tuple_getattr: extern "C" fn(*mut std::ffi::c_void, i32, *mut std::ffi::c_void, *mut bool) -> u64,
+    pub heap_tuple_getattr:
+        extern "C" fn(*mut std::ffi::c_void, i32, *mut std::ffi::c_void, *mut bool) -> u64,
     pub heap_tuple_setattr: extern "C" fn(*mut std::ffi::c_void, i32, u64, *mut std::ffi::c_void),
     pub heap_tuple_tableoid: extern "C" fn(*mut std::ffi::c_void) -> u32,
     pub heap_tuple_tid: extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void,
@@ -236,10 +257,16 @@ pub struct KwabiV1 {
     pub slot_tupledesc: extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void,
     // Table AM
     pub table_am_get: extern "C" fn(u32) -> *mut KwabiTableAm,
-    pub table_am_beginscan: extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+    pub table_am_beginscan: extern "C" fn(
+        *mut KwabiTableAm,
+        *mut std::ffi::c_void,
+        i32,
+        *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void,
     pub table_am_endscan: extern "C" fn(*mut std::ffi::c_void),
     pub table_am_getnext: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool,
-    pub table_am_insert: extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32, *mut std::ffi::c_void),
+    pub table_am_insert:
+        extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32, *mut std::ffi::c_void),
     pub table_am_update: extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32),
     pub table_am_delete: extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32),
     // Executor
@@ -262,20 +289,35 @@ pub struct KwabiV1 {
     pub spinlock_release: extern "C" fn(*mut std::ffi::c_void),
     pub spinlock_held_by_me: extern "C" fn(*mut std::ffi::c_void) -> bool,
     // GUC
-    pub guc_get_int: extern "C" fn(*const i8) -> i32,
-    pub guc_get_string: extern "C" fn(*const i8) -> *const i8,
-    pub guc_get_bool: extern "C" fn(*const i8) -> bool,
-    pub guc_get_float: extern "C" fn(*const i8) -> f64,
-    pub guc_set_int: extern "C" fn(*const i8, i32),
-    pub guc_set_string: extern "C" fn(*const i8, *const i8),
-    pub guc_set_bool: extern "C" fn(*const i8, bool),
-    pub guc_set_float: extern "C" fn(*const i8, f64),
+    //
+    // `Option<unsafe extern "C" fn>`, not a bare pointer: the header's rule is
+    // that every slot starts null and an extension MUST test a slot before
+    // calling it, and a bare function-pointer field cannot express absence.
+    // These eight are wired by the per-version shim (they can raise, and the
+    // error firewall forbids a Rust frame between a PG_TRY and a raising call).
+    pub guc_get_int: Option<unsafe extern "C" fn(*const i8) -> i32>,
+    pub guc_get_string: Option<unsafe extern "C" fn(*const i8) -> *const i8>,
+    pub guc_get_bool: Option<unsafe extern "C" fn(*const i8) -> bool>,
+    pub guc_get_float: Option<unsafe extern "C" fn(*const i8) -> f64>,
+    pub guc_set_int: Option<unsafe extern "C" fn(*const i8, i32)>,
+    pub guc_set_string: Option<unsafe extern "C" fn(*const i8, *const i8)>,
+    pub guc_set_bool: Option<unsafe extern "C" fn(*const i8, bool)>,
+    pub guc_set_float: Option<unsafe extern "C" fn(*const i8, f64)>,
     // Explain
-    pub explain_query: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *const i8, *mut std::ffi::c_void, *mut std::ffi::c_void),
+    pub explain_query: extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        *const i8,
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+    ),
     pub explain_get_index_name: extern "C" fn(u32) -> *const i8,
     // Vacuum
-    pub vacuum_rel: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void),
-    pub vacuum_analyze_rel: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void),
+    pub vacuum_rel:
+        extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void),
+    pub vacuum_analyze_rel:
+        extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void),
     // Triggers
     pub trigger_desc: extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void,
     pub trigger_count: extern "C" fn(*mut std::ffi::c_void) -> i32,
@@ -328,10 +370,17 @@ pub struct KwabiV1 {
     // `Option<fn>` is the same size and layout as the pointer it wraps (null
     // == None), so this costs nothing at the ABI level and is checked against
     // the header's field count by the harness like every other field.
-    pub memory_chunk_context: Option<unsafe extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>,
+    pub memory_chunk_context:
+        Option<unsafe extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>,
     pub current_memory_context: Option<unsafe extern "C" fn() -> *mut std::ffi::c_void>,
     pub raise_error: Option<unsafe extern "C" fn(i32, *const i8)>,
-    pub try_body: Option<unsafe extern "C" fn(guarded::KwabiBodyFn, *mut std::ffi::c_void, *mut guarded::KwabiErrorAbi) -> i32>,
+    pub try_body: Option<
+        unsafe extern "C" fn(
+            guarded::KwabiBodyFn,
+            *mut std::ffi::c_void,
+            *mut guarded::KwabiErrorAbi,
+        ) -> i32,
+    >,
     pub error_get: Option<unsafe extern "C" fn(*mut guarded::KwabiErrorAbi)>,
     pub capabilities: Option<unsafe extern "C" fn() -> u64>,
     pub memory_context_create: Option<unsafe extern "C" fn(*const i8) -> *mut KwabiMemoryContext>,
@@ -526,21 +575,25 @@ impl Kwabi {
     /// `Kwabi::error()`. (The error type is `()` rather than `KwabiError`
     /// because the message lives in the runtime's buffer, not here; call
     /// `error()` to fetch it.)
+    #[allow(clippy::result_unit_err)]
     pub fn call_function0(&self, info: &FmgrInfo) -> Result<Option<u64>, ()> {
         self.call_function(info, &[], &[])
     }
 
     /// Call a 1-argument function.
+    #[allow(clippy::result_unit_err)]
     pub fn call_function1(&self, info: &FmgrInfo, arg1: u64) -> Result<Option<u64>, ()> {
         self.call_function(info, &[arg1], &[false])
     }
 
     /// Call a 2-argument function.
+    #[allow(clippy::result_unit_err)]
     pub fn call_function2(&self, info: &FmgrInfo, arg1: u64, arg2: u64) -> Result<Option<u64>, ()> {
         self.call_function(info, &[arg1, arg2], &[false, false])
     }
 
     /// Call a 3-argument function.
+    #[allow(clippy::result_unit_err)]
     pub fn call_function3(
         &self,
         info: &FmgrInfo,
@@ -560,6 +613,7 @@ impl Kwabi {
     /// This goes through the variadic `call_function` slot, which the shim
     /// implements by building the `FunctionCallInfo` itself — PostgreSQL has no
     /// N-ary call helper.
+    #[allow(clippy::result_unit_err)]
     pub fn call_function(
         &self,
         info: &FmgrInfo,
@@ -628,19 +682,30 @@ impl Kwabi {
     // ---- SPI ----
 
     /// Execute a SQL query.
+    ///
+    /// Returns `Err` if the runtime does not provide `spi_execute`, or the
+    /// query failed. The SPI slots are wired by the per-version shim.
     pub fn spi_query(&self, sql: &str) -> Result<SPIResult<'_>, KwabiError> {
         let c_sql = CString::new(sql).map_err(|_| KwabiError {
             code: -1,
             message: "invalid SQL string".to_string(),
         })?;
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            (self.api.spi_execute)(c_sql.as_ptr(), false, 0)
-        }))
-        .map_err(|_| KwabiError {
-            code: -1,
-            message: "panic in spi_execute".to_string(),
-        })?;
+        let f = match self.api.spi_execute {
+            Some(f) => f,
+            None => {
+                return Err(KwabiError {
+                    code: -1,
+                    message: "spi_execute is not wired".to_string(),
+                })
+            }
+        };
+
+        let result = catch_unwind(AssertUnwindSafe(|| unsafe { f(c_sql.as_ptr(), false, 0) }))
+            .map_err(|_| KwabiError {
+                code: -1,
+                message: "panic in spi_execute".to_string(),
+            })?;
 
         if result.is_null() {
             return Err(KwabiError {
@@ -662,13 +727,21 @@ impl Kwabi {
             message: "invalid SQL string".to_string(),
         })?;
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            (self.api.spi_execute)(c_sql.as_ptr(), true, 0)
-        }))
-        .map_err(|_| KwabiError {
-            code: -1,
-            message: "panic in spi_execute".to_string(),
-        })?;
+        let f = match self.api.spi_execute {
+            Some(f) => f,
+            None => {
+                return Err(KwabiError {
+                    code: -1,
+                    message: "spi_execute is not wired".to_string(),
+                })
+            }
+        };
+
+        let result = catch_unwind(AssertUnwindSafe(|| unsafe { f(c_sql.as_ptr(), true, 0) }))
+            .map_err(|_| KwabiError {
+                code: -1,
+                message: "panic in spi_execute".to_string(),
+            })?;
 
         if result.is_null() {
             return Err(KwabiError {
@@ -733,21 +806,43 @@ impl Kwabi {
     // ---- GUC ----
 
     /// Get an integer GUC value.
+    ///
+    /// Returns `Err` if the runtime does not provide `guc_get_int`.
     pub fn guc_int(&self, name: &str) -> Result<i32, KwabiError> {
         let c_name = CString::new(name).map_err(|_| KwabiError {
             code: -1,
             message: "invalid GUC name".to_string(),
         })?;
-        Ok((self.api.guc_get_int)(c_name.as_ptr()))
+        let f = match self.api.guc_get_int {
+            Some(f) => f,
+            None => {
+                return Err(KwabiError {
+                    code: -1,
+                    message: "guc_get_int is not wired".to_string(),
+                })
+            }
+        };
+        Ok(unsafe { f(c_name.as_ptr()) })
     }
 
     /// Get a string GUC value.
+    ///
+    /// Returns `Err` if the runtime does not provide `guc_get_string`.
     pub fn guc_string(&self, name: &str) -> Result<String, KwabiError> {
         let c_name = CString::new(name).map_err(|_| KwabiError {
             code: -1,
             message: "invalid GUC name".to_string(),
         })?;
-        let ptr = (self.api.guc_get_string)(c_name.as_ptr());
+        let f = match self.api.guc_get_string {
+            Some(f) => f,
+            None => {
+                return Err(KwabiError {
+                    code: -1,
+                    message: "guc_get_string is not wired".to_string(),
+                })
+            }
+        };
+        let ptr = unsafe { f(c_name.as_ptr()) };
         if ptr.is_null() {
             return Err(KwabiError {
                 code: -1,
@@ -761,12 +856,23 @@ impl Kwabi {
     }
 
     /// Get a boolean GUC value.
+    ///
+    /// Returns `Err` if the runtime does not provide `guc_get_bool`.
     pub fn guc_bool(&self, name: &str) -> Result<bool, KwabiError> {
         let c_name = CString::new(name).map_err(|_| KwabiError {
             code: -1,
             message: "invalid GUC name".to_string(),
         })?;
-        Ok((self.api.guc_get_bool)(c_name.as_ptr()))
+        let f = match self.api.guc_get_bool {
+            Some(f) => f,
+            None => {
+                return Err(KwabiError {
+                    code: -1,
+                    message: "guc_get_bool is not wired".to_string(),
+                })
+            }
+        };
+        Ok(unsafe { f(c_name.as_ptr()) })
     }
 
     // ---- Extensions ----
@@ -1006,19 +1112,31 @@ impl<'a> Drop for Node<'a> {
 
 impl<'a> SPIResult<'a> {
     /// Get the number of tuples.
+    ///
+    /// Returns 0 if the runtime does not provide `spi_result_ntuples`.
     pub fn ntuples(&self) -> i32 {
-        (self.kwabi.api.spi_result_ntuples)(self.handle)
+        match self.kwabi.api.spi_result_ntuples {
+            Some(f) => unsafe { f(self.handle) },
+            None => 0,
+        }
     }
 
     /// Get a value from the result.
+    ///
+    /// Returns 0 if the runtime does not provide `spi_result_get_value`.
     pub fn get_value(&self, tupno: i32, attno: i32) -> u64 {
-        (self.kwabi.api.spi_result_get_value)(self.handle, tupno, attno)
+        match self.kwabi.api.spi_result_get_value {
+            Some(f) => unsafe { f(self.handle, tupno, attno) },
+            None => 0,
+        }
     }
 }
 
 impl<'a> Drop for SPIResult<'a> {
     fn drop(&mut self) {
-        (self.kwabi.api.spi_free_result)(self.handle);
+        if let Some(f) = self.kwabi.api.spi_free_result {
+            unsafe { f(self.handle) };
+        }
     }
 }
 
@@ -1066,11 +1184,7 @@ impl<'a> LogicalDecodingCtx<'a> {
     pub fn read(&self) -> Option<(i64, *mut std::ffi::c_void)> {
         let mut lsn: i64 = 0;
         let mut data: *mut std::ffi::c_void = ptr::null_mut();
-        let success = (self.kwabi.api.logical_decoding_read)(
-            self.handle,
-            &mut lsn,
-            &mut data,
-        );
+        let success = (self.kwabi.api.logical_decoding_read)(self.handle, &mut lsn, &mut data);
         if success {
             Some((lsn, data))
         } else {
@@ -1117,7 +1231,7 @@ static mut KWABI_API: Option<&'static KwabiV1> = None;
 ///
 /// This is called by the runtime after `kwabi_ext_init`.
 pub fn instance() -> Option<Kwabi> {
-    unsafe { KWABI_API.map(|api| Kwabi::from_api(api)) }
+    unsafe { KWABI_API.map(Kwabi::from_api) }
 }
 
 // ========================================================================
