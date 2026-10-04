@@ -46,7 +46,7 @@ PSQL      := $(PGBIN)/psql
 RUNTIME_DIR := ..
 RELEASE     := $(RUNTIME_DIR)/target/release
 # kwabi.h lives in notes/, one level above the runtime crate.
-PG_CFLAGS := -I$(PGINC) -I/opt/homebrew/include -I$(RUNTIME_DIR)/vendor/kwabi \
+PG_CFLAGS := -I$(PGINC) -I/opt/homebrew/include -I$(RUNTIME_DIR)/.. \
              -Wno-ignored-attributes
 
 # PostgreSQL's DLSUFFIX on macOS is .dylib even though the object is a Mach-O
@@ -56,7 +56,7 @@ CANARY := libcanary.dylib
 
 .PHONY: all build canary check install uninstall proof try panic-probe \
         guard-build guard-test guard-control cap-consumer fmgr mem-api \
-        subxact-probe \
+        spi-api type-api subxact-probe \
         build-once ci clean info cluster-start cluster-stop cluster-status
 
 all: build
@@ -93,7 +93,7 @@ $(RELEASE)/libkwabi_runtime.a: $(RUNTIME_SRC)
 # The extension: includes only kwabi.h, links no PostgreSQL symbol. Built
 # ONCE — this target does not depend on PG, which is the claim being tested.
 canary:
-	cc -shared -fPIC -Wall -Wextra -I$(RUNTIME_DIR)/vendor/kwabi \
+	cc -shared -fPIC -Wall -Wextra -I$(RUNTIME_DIR)/.. \
 	   -o $(RUNTIME_DIR)/canary/$(CANARY) $(RUNTIME_DIR)/canary/canary.c
 	@echo "built canary/$(CANARY) (version-independent)"
 
@@ -154,6 +154,17 @@ mem-api: check install
 	$(PSQL) -p $(PGPORT) -v ON_ERROR_STOP=0 \
 	  -v bundle='$(BUNDLE)' \
 	  -f mem-api.sql postgres
+
+# The SPI group: execute queries, read results, handle errors.
+spi-api: check install
+	$(PSQL) -p $(PGPORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' -v canary='$(CANARY)' -v libdir='$(PKGLIBDIR)' \
+	  -f spi-api.sql postgres
+
+type-api: check install
+	$(PSQL) -p $(PGPORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' -v canary='$(CANARY)' -v libdir='$(PKGLIBDIR)' \
+	  -f type-api.sql postgres
 
 # The two-way control for fmgr-api check 13: builds a bundle with the
 # subtransaction removed and requires the partial write to SURVIVE there.
