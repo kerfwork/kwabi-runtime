@@ -121,7 +121,7 @@ else
 fi
 
 echo "[core] src/abi.rs matches kwabi.h"
-if (cd .. && python3 gen_kwabi_struct.py ../kwabi.h > /tmp/kwabi_abi_check.rs \
+if (cd .. && python3 gen_kwabi_struct.py vendor/kwabi/kwabi.h > /tmp/kwabi_abi_check.rs \
       && diff -q /tmp/kwabi_abi_check.rs src/abi.rs >/dev/null); then
     record PASS core "src/abi.rs is current"
 else
@@ -129,7 +129,7 @@ else
 fi
 
 echo "[core] header compiles standalone"
-if cc -fsyntax-only -Wall -Wextra -x c "$(cd .. && pwd)/../kwabi.h" 2>/dev/null; then
+if cc -fsyntax-only -Wall -Wextra -x c "$(cd .. && pwd)/vendor/kwabi/kwabi.h" 2>/dev/null; then
     record PASS core "kwabi.h compiles"
 else
     record FAIL core "kwabi.h does not compile"

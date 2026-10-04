@@ -46,7 +46,7 @@ PSQL      := $(PGBIN)/psql
 RUNTIME_DIR := ..
 RELEASE     := $(RUNTIME_DIR)/target/release
 # kwabi.h lives in notes/, one level above the runtime crate.
-PG_CFLAGS := -I$(PGINC) -I/opt/homebrew/include -I$(RUNTIME_DIR)/.. \
+PG_CFLAGS := -I$(PGINC) -I/opt/homebrew/include -I$(RUNTIME_DIR)/vendor/kwabi \
              -Wno-ignored-attributes
 
 # PostgreSQL's DLSUFFIX on macOS is .dylib even though the object is a Mach-O
@@ -93,7 +93,7 @@ $(RELEASE)/libkwabi_runtime.a: $(RUNTIME_SRC)
 # The extension: includes only kwabi.h, links no PostgreSQL symbol. Built
 # ONCE — this target does not depend on PG, which is the claim being tested.
 canary:
-	cc -shared -fPIC -Wall -Wextra -I$(RUNTIME_DIR)/.. \
+	cc -shared -fPIC -Wall -Wextra -I$(RUNTIME_DIR)/vendor/kwabi \
 	   -o $(RUNTIME_DIR)/canary/$(CANARY) $(RUNTIME_DIR)/canary/canary.c
 	@echo "built canary/$(CANARY) (version-independent)"
 
