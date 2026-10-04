@@ -1,0 +1,12 @@
+# Rust
+target/
+
+# Compiled objects
+*.o
+*.so
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
