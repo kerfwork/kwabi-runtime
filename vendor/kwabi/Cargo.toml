@@ -1,0 +1,24 @@
+[package]
+name = "kwabi"
+version = "0.1.0"
+edition = "2021"
+description = "Safe Rust bindings for the kwabi stable ABI for PostgreSQL"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/kerfwork/kwabi"
+
+[features]
+default = ["stable"]
+stable = []
+nightly = []
+
+[dependencies]
+# The `guarded_body` attribute macro lives in a proc-macro crate, because
+# macro_rules! cannot provide an attribute macro.
+kwabi-macros = { path = "kwabi-macros" }
+
+[dev-dependencies]
+kwabi-macros = { path = "kwabi-macros" }
+
+[lib]
+name = "kwabi"
+crate-type = ["lib", "staticlib"]

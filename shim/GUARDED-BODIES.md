@@ -110,8 +110,8 @@ strategy. The full comparison of treatments is in
 
 | file | role |
 |---|---|
-| `rust-sdk/src/guarded.rs` | `contain_panic`, `IntoStatus`, the error slot |
-| `rust-sdk/kwabi-macros/src/lib.rs` | the `#[guarded_body]` attribute macro |
+| `vendor/kwabi/src/guarded.rs` | `contain_panic`, `IntoStatus`, the error slot |
+| `vendor/kwabi/kwabi-macros/src/lib.rs` | the `#[guarded_body]` attribute macro |
 | `runtime-skeleton/canary/guarded_bodies.rs` | the test bodies (guarded + raw control) |
 | `runtime-skeleton/shim/guard-test.sql` | the containment test |
 | `runtime-skeleton/shim/guard-control.sql` | the control (aborts) |

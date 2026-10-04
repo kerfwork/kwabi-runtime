@@ -8,4 +8,4 @@ name = "guarded_canary"
 crate-type = ["cdylib"]
 
 [dependencies]
-kwabi = { path = "../../../rust-sdk" }
+kwabi = { path = "../../vendor/kwabi" }

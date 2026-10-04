@@ -14,7 +14,7 @@ name = "kwabi_runtime"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-kwabi = { path = "../rust-sdk" }
+kwabi = { path = "vendor/kwabi" }
 
 [features]
 default = ["pg18"]
