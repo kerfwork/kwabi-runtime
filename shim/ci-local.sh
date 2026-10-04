@@ -121,7 +121,7 @@ else
 fi
 
 echo "[core] src/abi.rs matches kwabi.h"
-if (cd .. && python3 gen_kwabi_struct.py vendor/kwabi/kwabi.h > /tmp/kwabi_abi_check.rs \
+if (cd .. && python3 gen_kwabi_struct.py ../kwabi.h > /tmp/kwabi_abi_check.rs \
       && diff -q /tmp/kwabi_abi_check.rs src/abi.rs >/dev/null); then
     record PASS core "src/abi.rs is current"
 else
@@ -129,7 +129,7 @@ else
 fi
 
 echo "[core] header compiles standalone"
-if cc -fsyntax-only -Wall -Wextra -x c "$(cd .. && pwd)/vendor/kwabi/kwabi.h" 2>/dev/null; then
+if cc -fsyntax-only -Wall -Wextra -x c "$(cd .. && pwd)/../kwabi.h" 2>/dev/null; then
     record PASS core "kwabi.h compiles"
 else
     record FAIL core "kwabi.h does not compile"
@@ -376,6 +376,31 @@ for M in "${MAJORS[@]}"; do
         echo "      see $OUT"
     fi
 
+    # --- type-api: type system through the ABI ---------------------------
+    echo "  [type-api] type system against :$PORT"
+    OUT=/tmp/kwabi_type_$M.log
+    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.dylib" \
+        -v canary="libcanary.dylib" \
+        -v libdir="$PKGLIB" \
+        -f type-api.sql postgres >"$OUT" 2>&1
+
+    TYPE_TRUE=$(grep -cE '^ t *$' "$OUT")
+    TYPE_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The named ones, so a failure says which.
+    TYPE_LEN=$(grep -A2 'type_length_int4' "$OUT" | grep -cE '^ t')
+    TYPE_ARR=$(grep -A2 'type_is_array_int4_array' "$OUT" | grep -cE '^ t')
+    TYPE_IN=$(grep -A2 'type_input_int4' "$OUT" | grep -cE '^ t')
+    TYPE_OUT=$(grep -A2 'type_output_int4' "$OUT" | grep -cE '^ t')
+
+    if [ "$TYPE_FALSE" -eq 0 ] && [ "$TYPE_LEN" -ge 1 ] && \
+       [ "$TYPE_ARR" -ge 1 ] && [ "$TYPE_IN" -ge 1 ] && [ "$TYPE_OUT" -ge 1 ]; then
+        record PASS "$M" "type-api green ($TYPE_TRUE assertions)"
+    else
+        record FAIL "$M" "type-api: true=$TYPE_TRUE false=$TYPE_FALSE len=$TYPE_LEN arr=$TYPE_ARR in=$TYPE_IN out=$TYPE_OUT"
+        echo "      see $OUT"
+    fi
+
     # --- capabilities: CONSUMED by an extension, not just read by the shim ---
     #
     # The section above proves the bitset is honest. This one proves an
@@ -486,6 +511,99 @@ for M in "${MAJORS[@]}"; do
         record PASS "$M" "fmgr-api green ($FMGR_TRUE assertions)"
     else
         record FAIL "$M" "fmgr-api: true=$FMGR_TRUE false=$FMGR_FALSE control=$FMGR_CONTROL null_result=$FMGR_ONENULL sqlstate=$FMGR_ERRCODE one_arg=$FMGR_ONEARG no_partial_work=$FMGR_NOSURVIVOR"
+        echo "      see $OUT"
+    fi
+
+    # --- guc-api: GUC access through the ABI -----------------------------
+    #
+    # The GUC group: read and write configuration values. The assertion that
+    # matters is `set_and_read_back` -- it proves that a write through the ABI
+    # is committed and readable, not just that the ABI can call
+    # GetConfigOptionByName.
+    #
+    # ON_ERROR_STOP is off: check 8 (the negative control) raises by design.
+    echo "  [guc-api] GUC access against :$PORT"
+    OUT=/tmp/kwabi_guc_$M.log
+    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.dylib" \
+        -f guc-api.sql postgres >"$OUT" 2>&1
+
+    GUC_TRUE=$(grep -cE '^ t *$' "$OUT")
+    GUC_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    GUC_CONTROL=$(grep -c "GUC negative control fired as intended" "$OUT")
+    # The three that carry the meaning, so a failure says which.
+    GUC_INT=$(grep -A2 'int_guc_read' "$OUT" | grep -cE '^ t')
+    GUC_SET=$(grep -A2 'set_and_read_back' "$OUT" | grep -cE '^ t')
+    GUC_BOOL=$(grep -A2 'bool_guc_read' "$OUT" | grep -cE '^ t')
+
+    if [ "$GUC_FALSE" -eq 0 ] && [ "$GUC_CONTROL" -ge 1 ] && \
+       [ "$GUC_INT" -ge 1 ] && [ "$GUC_SET" -ge 1 ] && \
+       [ "$GUC_BOOL" -ge 1 ]; then
+        record PASS "$M" "guc-api green ($GUC_TRUE assertions)"
+    else
+        record FAIL "$M" "guc-api: true=$GUC_TRUE false=$GUC_FALSE control=$GUC_CONTROL int=$GUC_INT set=$GUC_SET bool=$GUC_BOOL"
+        echo "      see $OUT"
+    fi
+
+    # --- defrem-api: column default operations through the ABI ------------
+    #
+    # The defrem group: create, alter, and drop column defaults. The
+    # assertion that matters is `defrem_lifecycle` -- it proves that a
+    # default set through the ABI is committed and readable.
+    #
+    # ON_ERROR_STOP is off: check 5 (the negative control) raises by design.
+    echo "  [defrem-api] column defaults against :$PORT"
+    OUT=/tmp/kwabi_defrem_$M.log
+    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.dylib" \
+        -f defrem-api.sql postgres >"$OUT" 2>&1
+
+    DEFREM_TRUE=$(grep -cE '^ t *$' "$OUT")
+    DEFREM_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    DEFREM_CONTROL=$(grep -c "defrem negative control fired as intended" "$OUT")
+    # The two that carry the meaning, so a failure says which.
+    DEFREM_LIFECYCLE=$(grep -A2 'defrem_lifecycle' "$OUT" | grep -cE '^ t')
+    DEFREM_ALIVE=$(grep -A2 'still_alive' "$OUT" | grep -cE '^ t')
+
+    if [ "$DEFREM_FALSE" -eq 0 ] && [ "$DEFREM_CONTROL" -ge 1 ] && \
+       [ "$DEFREM_LIFECYCLE" -ge 1 ] && [ "$DEFREM_ALIVE" -ge 1 ]; then
+        record PASS "$M" "defrem-api green ($DEFREM_TRUE assertions)"
+    else
+        record FAIL "$M" "defrem-api: true=$DEFREM_TRUE false=$DEFREM_FALSE control=$DEFREM_CONTROL lifecycle=$DEFREM_LIFECYCLE alive=$DEFREM_ALIVE"
+        echo "      see $OUT"
+    fi
+
+    # --- spi-api: SQL execution through the ABI --------------------------
+    #
+    # The SPI group: execute queries, read results. The assertion that
+    # matters is `insert_then_select` -- it proves that a write through the
+    # ABI is committed and readable, not just that the ABI can call
+    # SPI_execute.
+    #
+    # ON_ERROR_STOP is off: check 5 (the negative control) raises by design.
+    echo "  [spi-api] SQL execution against :$PORT"
+    OUT=/tmp/kwabi_spi_$M.log
+    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.dylib" \
+        -f spi-api.sql postgres >"$OUT" 2>&1
+
+    SPI_TRUE=$(grep -cE '^ t *$' "$OUT")
+    SPI_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    SPI_CONTROL=$(grep -c "SPI negative control fired as intended" "$OUT")
+    # The three that carry the meaning, so a failure says which.
+    SPI_SELECT=$(grep -A2 'select_works' "$OUT" | grep -cE '^ t')
+    SPI_INSERT=$(grep -A2 'insert_then_select' "$OUT" | grep -cE '^ t')
+    SPI_WRITE=$(grep -A2 'write_visible' "$OUT" | grep -cE '^ t')
+
+    if [ "$SPI_FALSE" -eq 0 ] && [ "$SPI_CONTROL" -ge 1 ] && \
+       [ "$SPI_SELECT" -ge 1 ] && [ "$SPI_INSERT" -ge 1 ] && \
+       [ "$SPI_WRITE" -ge 1 ]; then
+        record PASS "$M" "spi-api green ($SPI_TRUE assertions)"
+    else
+        record FAIL "$M" "spi-api: true=$SPI_TRUE false=$SPI_FALSE control=$SPI_CONTROL select=$SPI_SELECT insert=$SPI_INSERT write=$SPI_WRITE"
         echo "      see $OUT"
     fi
 
