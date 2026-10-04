@@ -15,7 +15,7 @@ build:
 	# Rust panic body -> object file, then everything into one shared object.
 	rustc --edition 2021 --crate-type staticlib -C panic=unwind \
 	      -o $(RUNTIME_DIR)/canary/libpanic_body.a panic_body.rs
-	cc -shared -fPIC -Wall -Wextra -I$(RUNTIME_DIR)/vendor/kwabi \
+	cc -shared -fPIC -Wall -Wextra -I$(RUNTIME_DIR)/.. \
 	   -o $(CANARY) canary.c \
 	   -Wl,-force_load,$(RUNTIME_DIR)/canary/libpanic_body.a
 	@echo "built $(CANARY)"
