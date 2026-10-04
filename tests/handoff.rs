@@ -246,7 +246,7 @@ fn sdk_mirror_matches_the_header() {
     // sound, so if this test fails the generator and the SDK disagree and the
     // header is the tie-breaker.
     let generated = include_str!("../src/abi.rs");
-    let sdk = include_str!("../../rust-sdk/src/lib.rs");
+    let sdk = include_str!("../vendor/kwabi/src/lib.rs");
 
     fn field_names(src: &str) -> Vec<String> {
         let start = src
