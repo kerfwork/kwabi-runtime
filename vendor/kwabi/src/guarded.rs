@@ -196,7 +196,7 @@ pub unsafe fn publish_report(out: *mut KwabiErrorAbi, status: i32) {
     }
     let report = match take_report() {
         Some(r) => r,
-        None => return,   // not a structured report; leave the runtime's message
+        None => return, // not a structured report; leave the runtime's message
     };
 
     // The caller's KwabiError starts with the same four fields the runtime's
@@ -410,13 +410,34 @@ impl KwabiReport {
         }
     }
 
-    pub fn detail(mut self, s: &str) -> Self { self.detail = s.to_string(); self }
-    pub fn hint(mut self, s: &str) -> Self { self.hint = s.to_string(); self }
-    pub fn schema(mut self, s: &str) -> Self { self.schema_name = s.to_string(); self }
-    pub fn table(mut self, s: &str) -> Self { self.table_name = s.to_string(); self }
-    pub fn column(mut self, s: &str) -> Self { self.column_name = s.to_string(); self }
-    pub fn datatype(mut self, s: &str) -> Self { self.datatype_name = s.to_string(); self }
-    pub fn constraint(mut self, s: &str) -> Self { self.constraint_name = s.to_string(); self }
+    pub fn detail(mut self, s: &str) -> Self {
+        self.detail = s.to_string();
+        self
+    }
+    pub fn hint(mut self, s: &str) -> Self {
+        self.hint = s.to_string();
+        self
+    }
+    pub fn schema(mut self, s: &str) -> Self {
+        self.schema_name = s.to_string();
+        self
+    }
+    pub fn table(mut self, s: &str) -> Self {
+        self.table_name = s.to_string();
+        self
+    }
+    pub fn column(mut self, s: &str) -> Self {
+        self.column_name = s.to_string();
+        self
+    }
+    pub fn datatype(mut self, s: &str) -> Self {
+        self.datatype_name = s.to_string();
+        self
+    }
+    pub fn constraint(mut self, s: &str) -> Self {
+        self.constraint_name = s.to_string();
+        self
+    }
 
     /// Convert a 5-character SQLSTATE into PostgreSQL's integer encoding.
     ///
