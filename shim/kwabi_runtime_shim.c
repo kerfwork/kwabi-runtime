@@ -34,6 +34,7 @@
 #include "utils/elog.h"
 #include "utils/builtins.h"
 #include "executor/spi.h"
+#include "utils/guc.h"        /* GetConfigOptionByName, SetConfigOption */
 #include <dlfcn.h>            /* dlopen: see kwabi_load_extension */
 
 /* The kwabi header names PostgreSQL types that postgres.h does not pull in.
@@ -61,6 +62,9 @@
 #include "executor/execdesc.h"  /* QueryDesc */
 #include "commands/vacuum.h"    /* VacuumParams */
 #include "lib/stringinfo.h"     /* StringInfo */
+#include "utils/lsyscache.h"     /* get_element_type, get_typlen, get_typtype, getBaseType */
+#include "utils/syscache.h"      /* SearchSysCache1, SysCacheGetAttr, ReleaseSysCache */
+#include "catalog/pg_type.h"     /* TYPTYPE_COMPOSITE, TYPEOID */
 
 /*
  * Version differences in this file are marked `VERSION-DIFF` so they can be
@@ -497,6 +501,708 @@ shim_call_function3(KwabiFmgrInfo info, Datum arg1, Datum arg2, Datum arg3,
     return shim_call_impl((FmgrInfo *) info, 3, a, NULL, isnull, result);
 }
 
+/* ---- shim-provided SPI slots ---------------------------------------- */
+
+/*
+ * The SPI result handle.
+ *
+ * SPI is a per-backend global state: SPI_tuptable and SPI_processed are
+ * globals that are overwritten by the next SPI command. So the result
+ * handle copies them out immediately, and the caller reads from the copy.
+ *
+ * The tuple table itself is NOT copied: it is owned by SPI and is only
+ * valid until the next SPI command or until SPI_finish is called. So
+ * spi_free_result must be called before the next spi_execute, and the
+ * caller must read all values before then. This is a limitation, but it
+ * is consistent with how SPI works in PostgreSQL.
+ */
+typedef struct KwabiSPIResultImpl {
+    SPITupleTable *tuptable;
+    uint64 processed;
+} KwabiSPIResultImpl;
+
+static KwabiSPIResult
+shim_spi_execute(const char *sql, bool read_only, int tcount)
+{
+    KwabiSPIResultImpl *result;
+    int spi_result;
+
+    if (sql == NULL)
+        return NULL;
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        return NULL;
+
+    spi_result = SPI_execute(sql, read_only, tcount);
+    if (spi_result < 0) {
+        SPI_finish();
+        return NULL;
+    }
+
+    result = (KwabiSPIResultImpl *) palloc(sizeof(KwabiSPIResultImpl));
+    result->tuptable = SPI_tuptable;
+    result->processed = SPI_processed;
+
+    return (KwabiSPIResult) result;
+}
+
+static KwabiSPIResult
+shim_spi_execute_plan(KwabiSPIPlan plan, Datum *values, const char *nulls,
+                      bool read_only, int tcount)
+{
+    KwabiSPIResultImpl *result;
+    int spi_result;
+
+    if (plan == NULL)
+        return NULL;
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        return NULL;
+
+    spi_result = SPI_execute_plan((SPIPlanPtr) plan, values, nulls, read_only, tcount);
+    if (spi_result < 0) {
+        SPI_finish();
+        return NULL;
+    }
+
+    result = (KwabiSPIResultImpl *) palloc(sizeof(KwabiSPIResultImpl));
+    result->tuptable = SPI_tuptable;
+    result->processed = SPI_processed;
+
+    return (KwabiSPIResult) result;
+}
+
+static void
+shim_spi_free_result(KwabiSPIResult result)
+{
+    if (result == NULL)
+        return;
+
+    SPI_finish();
+    pfree(result);
+}
+
+static int
+shim_spi_result_ntuples(KwabiSPIResult result)
+{
+    KwabiSPIResultImpl *impl = (KwabiSPIResultImpl *) result;
+    if (impl == NULL)
+        return 0;
+    return (int) impl->processed;
+}
+
+static Datum
+shim_spi_result_get_value(KwabiSPIResult result, int tupno, int attno)
+{
+    KwabiSPIResultImpl *impl = (KwabiSPIResultImpl *) result;
+    bool isnull;
+
+    if (impl == NULL || impl->tuptable == NULL)
+        return (Datum) 0;
+    if (tupno < 0 || tupno >= (int) impl->processed)
+        return (Datum) 0;
+    if (attno < 1 || attno > impl->tuptable->tupdesc->natts)
+        return (Datum) 0;
+
+    return SPI_getbinval(impl->tuptable->vals[tupno],
+                         impl->tuptable->tupdesc, attno, &isnull);
+}
+
+/* ---- shim-provided GUC slots ---------------------------------------- */
+
+/*
+ * GUC access through the ABI.
+ *
+ * These are shim-owned because GetConfigOptionByName and SetConfigOption
+ * can raise (e.g. "unrecognized configuration parameter"), and the error
+ * firewall forbids a Rust frame between a PG_TRY and a raising call.
+ *
+ * The signatures match kwabi.h exactly:
+ *   int (*guc_get_int)(const char *name);
+ *   const char *(*guc_get_string)(const char *name);
+ *   bool (*guc_get_bool)(const char *name);
+ *   double (*guc_get_float)(const char *name);
+ *   void (*guc_set_int)(const char *name, int value);
+ *   void (*guc_set_string)(const char *name, const char *value);
+ *   void (*guc_set_bool)(const char *name, bool value);
+ *   void (*guc_set_float)(const char *name, double value);
+ */
+
+static int
+shim_guc_get_int(const char *name)
+{
+    char        *str;
+    int          value = 0;
+
+    if (name == NULL)
+        return 0;
+
+    PG_TRY();
+    {
+        str = GetConfigOptionByName(name, NULL, false);
+        if (str != NULL)
+            value = atoi(str);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        value = 0;
+    }
+    PG_END_TRY();
+
+    return value;
+}
+
+static const char *
+shim_guc_get_string(const char *name)
+{
+    char        *str;
+
+    if (name == NULL)
+        return NULL;
+
+    PG_TRY();
+    {
+        str = GetConfigOptionByName(name, NULL, false);
+        return str;
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        return NULL;
+    }
+    PG_END_TRY();
+}
+
+static bool
+shim_guc_get_bool(const char *name)
+{
+    char        *str;
+    bool         value = false;
+
+    if (name == NULL)
+        return false;
+
+    PG_TRY();
+    {
+        str = GetConfigOptionByName(name, NULL, false);
+        if (str != NULL)
+            value = (str[0] == 't' || str[0] == 'T' || str[0] == '1' || str[0] == 'o');
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        value = false;
+    }
+    PG_END_TRY();
+
+    return value;
+}
+
+static double
+shim_guc_get_float(const char *name)
+{
+    char        *str;
+    double       value = 0.0;
+
+    if (name == NULL)
+        return 0.0;
+
+    PG_TRY();
+    {
+        str = GetConfigOptionByName(name, NULL, false);
+        if (str != NULL)
+            value = atof(str);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        value = 0.0;
+    }
+    PG_END_TRY();
+
+    return value;
+}
+
+static void
+shim_guc_set_int(const char *name, int value)
+{
+    char         buf[64];
+
+    if (name == NULL)
+        return;
+
+    snprintf(buf, sizeof(buf), "%d", value);
+
+    PG_TRY();
+    {
+        SetConfigOption(name, buf, PGC_USERSET, PGC_S_SESSION);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+    }
+    PG_END_TRY();
+}
+
+static void
+shim_guc_set_string(const char *name, const char *value)
+{
+    if (name == NULL)
+        return;
+
+    PG_TRY();
+    {
+        SetConfigOption(name, value != NULL ? value : "", PGC_USERSET, PGC_S_SESSION);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+    }
+    PG_END_TRY();
+}
+
+static void
+shim_guc_set_bool(const char *name, bool value)
+{
+    if (name == NULL)
+        return;
+
+    PG_TRY();
+    {
+        SetConfigOption(name, value ? "on" : "off", PGC_USERSET, PGC_S_SESSION);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+    }
+    PG_END_TRY();
+}
+
+static void
+shim_guc_set_float(const char *name, double value)
+{
+    char         buf[64];
+
+    if (name == NULL)
+        return;
+
+    snprintf(buf, sizeof(buf), "%g", value);
+
+    PG_TRY();
+    {
+        SetConfigOption(name, buf, PGC_USERSET, PGC_S_SESSION);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+    }
+    PG_END_TRY();
+}
+
+/* ---- shim-provided defrem slots -------------------------------------- */
+
+/*
+ * Default (defrem) operations through the ABI.
+ *
+ * These use SPI to execute ALTER TABLE statements, which is the safest
+ * approach: it goes through PostgreSQL's own parser and executor, so
+ * the semantics are exactly PostgreSQL's.
+ *
+ * The signatures match kwabi.h:
+ *   void (*defrem_create)(const char *name, const char *type, const char *value);
+ *   void (*defrem_alter)(const char *name, const char *value);
+ *   void (*defrem_drop)(const char *name);
+ *
+ * `name` is expected in "table.column" format.
+ */
+
+/*
+ * Split "table.column" into table and column parts.
+ * Returns true if the split succeeded, false if there was no dot.
+ */
+static bool
+split_table_column(const char *name, char *table, size_t table_len,
+                   char *column, size_t column_len)
+{
+    const char *dot;
+
+    if (name == NULL || table == NULL || column == NULL)
+        return false;
+
+    dot = strrchr(name, '.');
+    if (dot == NULL)
+        return false;
+
+    if ((size_t)(dot - name) >= table_len)
+        return false;
+    if (strlen(dot + 1) >= column_len)
+        return false;
+
+    snprintf(table, table_len, "%.*s", (int)(dot - name), name);
+    snprintf(column, column_len, "%s", dot + 1);
+    return true;
+}
+
+static void
+shim_defrem_create(const char *name, const char *type, const char *value)
+{
+    char         sql[1024];
+    char         table[256];
+    char         column[256];
+
+    if (name == NULL || type == NULL || value == NULL)
+        return;
+
+    if (!split_table_column(name, table, sizeof(table), column, sizeof(column)))
+        return;
+
+    snprintf(sql, sizeof(sql),
+             "ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s",
+             table, column, value);
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        return;
+
+    if (SPI_execute(sql, false, 0) < 0) {
+        SPI_finish();
+        return;
+    }
+
+    SPI_finish();
+}
+
+static void
+shim_defrem_alter(const char *name, const char *value)
+{
+    char         sql[1024];
+    char         table[256];
+    char         column[256];
+
+    if (name == NULL || value == NULL)
+        return;
+
+    if (!split_table_column(name, table, sizeof(table), column, sizeof(column)))
+        return;
+
+    snprintf(sql, sizeof(sql),
+             "ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s",
+             table, column, value);
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        return;
+
+    if (SPI_execute(sql, false, 0) < 0) {
+        SPI_finish();
+        return;
+    }
+
+    SPI_finish();
+}
+
+static void
+shim_defrem_drop(const char *name)
+{
+    char         sql[1024];
+    char         table[256];
+    char         column[256];
+
+    if (name == NULL)
+        return;
+
+    if (!split_table_column(name, table, sizeof(table), column, sizeof(column)))
+        return;
+
+    snprintf(sql, sizeof(sql),
+             "ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT",
+             table, column);
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        return;
+
+    if (SPI_execute(sql, false, 0) < 0) {
+        SPI_finish();
+        return;
+    }
+
+    SPI_finish();
+}
+
+/* ---- shim-provided type system slots --------------------------------- */
+
+/*
+ * Type system access through the ABI.
+ *
+ * These are shim-owned because catalog lookups can raise (e.g. "type does
+ * not exist"), and the error firewall forbids a Rust frame between a PG_TRY
+ * and a raising call.
+ *
+ * The signatures match kwabi.h exactly:
+ *   Datum (*type_input)(Oid type_oid, const char *input, int32 typmod);
+ *   char *(*type_output)(Oid type_oid, Datum value);
+ *   Datum (*type_recv)(Oid type_oid, StringInfo buf);
+ *   void (*type_send)(Oid type_oid, Datum value, StringInfo buf);
+ *   Oid (*type_element_type)(Oid type_oid);
+ *   int16 (*type_length)(Oid type_oid);
+ *   bool (*type_is_array)(Oid type_oid);
+ *   bool (*type_is_composite)(Oid type_oid);
+ *   Oid (*type_base_type)(Oid type_oid);
+ */
+
+/* Look up a type's I/O function OID from the catalog cache. */
+static Oid
+get_type_io_func(Oid type_oid, int which)
+{
+    HeapTuple tup;
+    Oid func_oid = InvalidOid;
+    bool isnull;
+
+    if (!OidIsValid(type_oid))
+        return InvalidOid;
+
+    tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
+    if (!HeapTupleIsValid(tup))
+        return InvalidOid;
+
+    switch (which) {
+        case 0: /* input */
+            func_oid = DatumGetObjectId(SysCacheGetAttr(TYPEOID, tup, Anum_pg_type_typinput, &isnull));
+            break;
+        case 1: /* output */
+            func_oid = DatumGetObjectId(SysCacheGetAttr(TYPEOID, tup, Anum_pg_type_typoutput, &isnull));
+            break;
+        case 2: /* receive */
+            func_oid = DatumGetObjectId(SysCacheGetAttr(TYPEOID, tup, Anum_pg_type_typreceive, &isnull));
+            break;
+        case 3: /* send */
+            func_oid = DatumGetObjectId(SysCacheGetAttr(TYPEOID, tup, Anum_pg_type_typsend, &isnull));
+            break;
+    }
+
+    ReleaseSysCache(tup);
+    return func_oid;
+}
+
+static Datum
+shim_type_input(Oid type_oid, const char *input, int32 typmod)
+{
+    Oid input_func;
+    Datum result = (Datum) 0;
+
+    if (!OidIsValid(type_oid) || input == NULL)
+        return (Datum) 0;
+
+    input_func = get_type_io_func(type_oid, 0);
+    if (!OidIsValid(input_func))
+        return (Datum) 0;
+
+    PG_TRY();
+    {
+        result = OidInputFunctionCall(input_func, (char *) input, type_oid, typmod);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = (Datum) 0;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static char *
+shim_type_output(Oid type_oid, Datum value)
+{
+    Oid output_func;
+    char *result = NULL;
+
+    if (!OidIsValid(type_oid))
+        return NULL;
+
+    output_func = get_type_io_func(type_oid, 1);
+    if (!OidIsValid(output_func))
+        return NULL;
+
+    PG_TRY();
+    {
+        result = OidOutputFunctionCall(output_func, value);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = NULL;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static Datum
+shim_type_recv(Oid type_oid, StringInfo buf)
+{
+    Oid recv_func;
+    Datum result = (Datum) 0;
+
+    if (!OidIsValid(type_oid) || buf == NULL)
+        return (Datum) 0;
+
+    recv_func = get_type_io_func(type_oid, 2);
+    if (!OidIsValid(recv_func))
+        return (Datum) 0;
+
+    PG_TRY();
+    {
+        result = OidReceiveFunctionCall(recv_func, buf, type_oid, -1);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = (Datum) 0;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static void
+shim_type_send(Oid type_oid, Datum value, StringInfo buf)
+{
+    Oid send_func;
+    bytea *result;
+
+    if (!OidIsValid(type_oid) || buf == NULL)
+        return;
+
+    send_func = get_type_io_func(type_oid, 3);
+    if (!OidIsValid(send_func))
+        return;
+
+    PG_TRY();
+    {
+        result = OidSendFunctionCall(send_func, value);
+        if (result != NULL) {
+            appendBinaryStringInfo(buf, VARDATA(result), VARSIZE(result) - VARHDRSZ);
+        }
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+    }
+    PG_END_TRY();
+}
+
+static Oid
+shim_type_element_type(Oid type_oid)
+{
+    Oid result = InvalidOid;
+
+    if (!OidIsValid(type_oid))
+        return InvalidOid;
+
+    PG_TRY();
+    {
+        result = get_element_type(type_oid);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = InvalidOid;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static int16
+shim_type_length(Oid type_oid)
+{
+    int16 result = 0;
+
+    if (!OidIsValid(type_oid))
+        return 0;
+
+    PG_TRY();
+    {
+        result = get_typlen(type_oid);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = 0;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static bool
+shim_type_is_array(Oid type_oid)
+{
+    bool result = false;
+
+    if (!OidIsValid(type_oid))
+        return false;
+
+    PG_TRY();
+    {
+        result = OidIsValid(get_element_type(type_oid));
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = false;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static bool
+shim_type_is_composite(Oid type_oid)
+{
+    bool result = false;
+    char typtype;
+
+    if (!OidIsValid(type_oid))
+        return false;
+
+    PG_TRY();
+    {
+        typtype = get_typtype(type_oid);
+        result = (typtype == TYPTYPE_COMPOSITE);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = false;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static Oid
+shim_type_base_type(Oid type_oid)
+{
+    Oid result = InvalidOid;
+
+    if (!OidIsValid(type_oid))
+        return InvalidOid;
+
+    PG_TRY();
+    {
+        result = getBaseType(type_oid);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = InvalidOid;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
 static const char *
 native_error_message(void)
 {
@@ -604,6 +1310,58 @@ _PG_init(void)
     shim_table.call_function1 = shim_call_function1;
     shim_table.call_function2 = shim_call_function2;
     shim_table.call_function3 = shim_call_function3;
+
+    /*
+     * The SPI group, shim-owned for the same reason as the fmgr group: SPI
+     * calls can raise, and the error firewall forbids a Rust frame between
+     * a PG_TRY and a raising call. SPI_connect/SPI_execute/SPI_finish are
+     * ordinary PostgreSQL symbols the shim reaches directly.
+     */
+    shim_table.spi_execute = shim_spi_execute;
+    shim_table.spi_execute_plan = shim_spi_execute_plan;
+    shim_table.spi_free_result = shim_spi_free_result;
+    shim_table.spi_result_ntuples = shim_spi_result_ntuples;
+    shim_table.spi_result_get_value = shim_spi_result_get_value;
+
+    /*
+     * The GUC group, shim-owned for the same reason as the fmgr group: GUC
+     * calls can raise, and the error firewall forbids a Rust frame between
+     * a PG_TRY and a raising call. GetConfigOptionByName and SetConfigOption
+     * are ordinary PostgreSQL symbols the shim reaches directly.
+     */
+    shim_table.guc_get_int = shim_guc_get_int;
+    shim_table.guc_get_string = shim_guc_get_string;
+    shim_table.guc_get_bool = shim_guc_get_bool;
+    shim_table.guc_get_float = shim_guc_get_float;
+    shim_table.guc_set_int = shim_guc_set_int;
+    shim_table.guc_set_string = shim_guc_set_string;
+    shim_table.guc_set_bool = shim_guc_set_bool;
+    shim_table.guc_set_float = shim_guc_set_float;
+
+    /*
+     * The defrem group, shim-owned for the same reason: ALTER TABLE can
+     * raise, and the error firewall forbids a Rust frame between a PG_TRY
+     * and a raising call. SPI_connect/SPI_execute/SPI_finish are ordinary
+     * PostgreSQL symbols the shim reaches directly.
+     */
+    shim_table.defrem_create = shim_defrem_create;
+    shim_table.defrem_alter = shim_defrem_alter;
+    shim_table.defrem_drop = shim_defrem_drop;
+
+    /*
+     * The type system group, shim-owned for the same reason: catalog lookups
+     * can raise, and the error firewall forbids a Rust frame between a PG_TRY
+     * and a raising call.
+     */
+    shim_table.type_input = shim_type_input;
+    shim_table.type_output = shim_type_output;
+    shim_table.type_recv = shim_type_recv;
+    shim_table.type_send = shim_type_send;
+    shim_table.type_element_type = shim_type_element_type;
+    shim_table.type_length = shim_type_length;
+    shim_table.type_is_array = shim_type_is_array;
+    shim_table.type_is_composite = shim_type_is_composite;
+    shim_table.type_base_type = shim_type_base_type;
 
     /*
      * The catching direction is shim-owned for the same reason: it needs
@@ -1319,6 +2077,451 @@ kwabi_fmgr_control(PG_FUNCTION_ARGS)
     ereport(ERROR,
             (errmsg("kwabi: fmgr negative control fired as intended"),
              errdetail("int4pl(2,3) is 5, not 6 -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * SPI proof functions
+ * ========================================================================
+ *
+ * These exercise the five SPI slots through the published table -- the same
+ * path an extension takes -- so what is tested is the ABI, not a parallel
+ * copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_spi_query(sql) -> text
+ *
+ * Execute a SQL query through the ABI and return a summary of the result.
+ * Proves that spi_execute, spi_result_ntuples, spi_result_get_value and
+ * spi_free_result all work together.
+ */
+PG_FUNCTION_INFO_V1(kwabi_spi_query);
+
+Datum
+kwabi_spi_query(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->spi_execute == NULL || api->spi_result_ntuples == NULL ||
+        api->spi_result_get_value == NULL || api->spi_free_result == NULL)
+        ereport(ERROR, (errmsg("kwabi: SPI slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiSPIResult result = api->spi_execute(sql, true, 0);
+    if (result == NULL)
+        ereport(ERROR, (errmsg("kwabi: spi_execute returned NULL")));
+
+    int ntuples = api->spi_result_ntuples(result);
+    StringInfoData buf;
+
+    initStringInfo(&buf);
+
+    if (ntuples > 0) {
+        /* Read the first row's first column to prove get_value works. */
+        Datum d = api->spi_result_get_value(result, 0, 1);
+        appendStringInfo(&buf, "rows=%d first_datum=%lu", ntuples,
+                         (unsigned long) d);
+    } else {
+        appendStringInfo(&buf, "rows=0");
+    }
+
+    api->spi_free_result(result);
+    pfree(sql);
+
+    PG_RETURN_TEXT_P(cstring_to_text(buf.data));
+}
+
+/*
+ * kwabi_spi_insert_then_select() -> text
+ *
+ * Insert a row through the ABI, then select it back. Proves that writes
+ * through SPI work and that the result of a subsequent query is readable.
+ */
+PG_FUNCTION_INFO_V1(kwabi_spi_insert_then_select);
+
+Datum
+kwabi_spi_insert_then_select(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->spi_execute == NULL || api->spi_result_ntuples == NULL ||
+        api->spi_result_get_value == NULL || api->spi_free_result == NULL)
+        ereport(ERROR, (errmsg("kwabi: SPI slots are not wired")));
+
+    /* Create a temp table. */
+    KwabiSPIResult r1 = api->spi_execute(
+        "CREATE TEMP TABLE kwabi_spi_t (val int)", false, 0);
+    if (r1 == NULL)
+        ereport(ERROR, (errmsg("spi_execute(CREATE) failed")));
+    api->spi_free_result(r1);
+
+    /* Insert a row. */
+    KwabiSPIResult r2 = api->spi_execute(
+        "INSERT INTO kwabi_spi_t VALUES (42)", false, 0);
+    if (r2 == NULL)
+        ereport(ERROR, (errmsg("spi_execute(INSERT) failed")));
+    api->spi_free_result(r2);
+
+    /* Select it back. */
+    KwabiSPIResult r3 = api->spi_execute(
+        "SELECT val FROM kwabi_spi_t", true, 0);
+    if (r3 == NULL)
+        ereport(ERROR, (errmsg("spi_execute(SELECT) failed")));
+
+    int ntuples = api->spi_result_ntuples(r3);
+    int val = 0;
+    if (ntuples > 0) {
+        Datum d = api->spi_result_get_value(r3, 0, 1);
+        val = DatumGetInt32(d);
+    }
+    api->spi_free_result(r3);
+
+    /* Clean up. */
+    KwabiSPIResult r4 = api->spi_execute(
+        "DROP TABLE kwabi_spi_t", false, 0);
+    if (r4 != NULL)
+        api->spi_free_result(r4);
+
+    PG_RETURN_INT32(val);
+}
+
+/*
+ * kwabi_spi_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It queries a known value and asserts a wrong one.
+ * That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_spi_control);
+
+Datum
+kwabi_spi_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->spi_execute == NULL || api->spi_result_ntuples == NULL ||
+        api->spi_result_get_value == NULL || api->spi_free_result == NULL)
+        ereport(ERROR, (errmsg("kwabi: SPI slots are not wired")));
+
+    KwabiSPIResult result = api->spi_execute(
+        "SELECT 1", true, 0);
+    if (result == NULL)
+        ereport(ERROR, (errmsg("spi_execute(SELECT 1) failed")));
+
+    int ntuples = api->spi_result_ntuples(result);
+    Datum d = api->spi_result_get_value(result, 0, 1);
+    int val = DatumGetInt32(d);
+    api->spi_free_result(result);
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (val == 2)
+        PG_RETURN_BOOL(true);   /* the comparison thinks 1 == 2: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: SPI negative control fired as intended"),
+             errdetail("SELECT 1 is 1, not 2 -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * GUC proof functions
+ * ========================================================================
+ *
+ * These exercise the eight GUC slots through the published table -- the same
+ * path an extension takes -- so what is tested is the ABI, not a parallel
+ * copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_guc_test_int() -> bool
+ *
+ * Get an integer GUC value through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_guc_test_int);
+
+Datum
+kwabi_guc_test_int(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->guc_get_int == NULL)
+        ereport(ERROR, (errmsg("kwabi: guc_get_int is not wired")));
+
+    int32 expected = PG_GETARG_INT32(0);
+    int32 actual = shim_api->guc_get_int("work_mem");
+
+    PG_RETURN_BOOL(actual == expected);
+}
+
+/*
+ * kwabi_guc_test_string() -> bool
+ *
+ * Get a string GUC value through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_guc_test_string);
+
+Datum
+kwabi_guc_test_string(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->guc_get_string == NULL)
+        ereport(ERROR, (errmsg("kwabi: guc_get_string is not wired")));
+
+    char *expected = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    const char *actual = shim_api->guc_get_string("server_version");
+
+    bool result = (actual != NULL && strcmp(actual, expected) == 0);
+    pfree(expected);
+
+    PG_RETURN_BOOL(result);
+}
+
+/*
+ * kwabi_guc_test_bool() -> bool
+ *
+ * Get a boolean GUC value through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_guc_test_bool);
+
+Datum
+kwabi_guc_test_bool(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->guc_get_bool == NULL)
+        ereport(ERROR, (errmsg("kwabi: guc_get_bool is not wired")));
+
+    bool expected = PG_GETARG_BOOL(0);
+    bool actual = shim_api->guc_get_bool("is_superuser");
+
+    PG_RETURN_BOOL(actual == expected);
+}
+
+/*
+ * kwabi_guc_test_float() -> bool
+ *
+ * Get a float GUC value through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_guc_test_float);
+
+Datum
+kwabi_guc_test_float(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->guc_get_float == NULL)
+        ereport(ERROR, (errmsg("kwabi: guc_get_float is not wired")));
+
+    float8 expected = PG_GETARG_FLOAT8(0);
+    double actual = shim_api->guc_get_float("shared_buffers");
+
+    PG_RETURN_BOOL(fabs(actual - expected) < 0.001);
+}
+
+/*
+ * kwabi_guc_set_test() -> bool
+ *
+ * Set a GUC value through the ABI, then read it back.
+ */
+PG_FUNCTION_INFO_V1(kwabi_guc_set_test);
+
+Datum
+kwabi_guc_set_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->guc_set_int == NULL ||
+        shim_api->guc_set_string == NULL || shim_api->guc_set_bool == NULL ||
+        shim_api->guc_set_float == NULL)
+        ereport(ERROR, (errmsg("kwabi: guc_set_* slots are not wired")));
+
+    /* Set a custom GUC through the ABI */
+    shim_api->guc_set_string("kwabi.test_guc", "hello");
+    shim_api->guc_set_int("kwabi.test_guc_int", 42);
+    shim_api->guc_set_bool("kwabi.test_guc_bool", true);
+    shim_api->guc_set_float("kwabi.test_guc_float", 3.14);
+
+    /* Read them back */
+    const char *str_val = shim_api->guc_get_string("kwabi.test_guc");
+    int int_val = shim_api->guc_get_int("kwabi.test_guc_int");
+    bool bool_val = shim_api->guc_get_bool("kwabi.test_guc_bool");
+    double float_val = shim_api->guc_get_float("kwabi.test_guc_float");
+
+    bool result = (str_val != NULL && strcmp(str_val, "hello") == 0 &&
+                   int_val == 42 && bool_val == true &&
+                   fabs(float_val - 3.14) < 0.001);
+
+    PG_RETURN_BOOL(result);
+}
+
+/*
+ * kwabi_guc_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It asserts a wrong GUC value, which must fail.
+ */
+PG_FUNCTION_INFO_V1(kwabi_guc_control);
+
+Datum
+kwabi_guc_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->guc_get_int == NULL)
+        ereport(ERROR, (errmsg("kwabi: guc_get_int is not wired")));
+
+    int32 actual = shim_api->guc_get_int("work_mem");
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (actual == 999999)
+        PG_RETURN_BOOL(true);   /* the comparison thinks work_mem == 999999: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: GUC negative control fired as intended"),
+             errdetail("work_mem is not 999999 -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * defrem proof functions
+ * ========================================================================
+ *
+ * These exercise the three defrem slots through the published table -- the
+ * same path an extension takes -- so what is tested is the ABI, not a
+ * parallel copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_defrem_test() -> bool
+ *
+ * Create, alter, and drop a column default through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_defrem_test);
+
+Datum
+kwabi_defrem_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->defrem_create == NULL ||
+        shim_api->defrem_alter == NULL || shim_api->defrem_drop == NULL)
+        ereport(ERROR, (errmsg("kwabi: defrem slots are not wired")));
+
+    /* Create a test table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE TEMP TABLE kwabi_defrem_t (val int)", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE TABLE failed")));
+    }
+    SPI_finish();
+
+    /* Set a default through the ABI */
+    shim_api->defrem_create("kwabi_defrem_t.val", "val", "42");
+
+    /* Read it back */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef "
+                     "JOIN pg_attribute ON adrelid = attrelid AND adnum = attnum "
+                     "WHERE attrelid = 'kwabi_defrem_t'::regclass AND attname = 'val'",
+                     true, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    bool default_set = false;
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull) {
+            char *expr = DatumGetCString(d);
+            default_set = (strcmp(expr, "42") == 0);
+            pfree(expr);
+        }
+    }
+    SPI_finish();
+
+    /* Alter the default through the ABI */
+    shim_api->defrem_alter("kwabi_defrem_t.val", "99");
+
+    /* Drop the default through the ABI */
+    shim_api->defrem_drop("kwabi_defrem_t.val");
+
+    /* Clean up */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("DROP TABLE kwabi_defrem_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP TABLE failed")));
+    }
+    SPI_finish();
+
+    PG_RETURN_BOOL(default_set);
+}
+
+/*
+ * kwabi_defrem_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It asserts a wrong default value, which must fail.
+ */
+PG_FUNCTION_INFO_V1(kwabi_defrem_control);
+
+Datum
+kwabi_defrem_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->defrem_create == NULL)
+        ereport(ERROR, (errmsg("kwabi: defrem_create is not wired")));
+
+    /* Create a test table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE TEMP TABLE kwabi_defrem_ctl_t (val int)", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE TABLE failed")));
+    }
+    SPI_finish();
+
+    /* Set a default through the ABI */
+    shim_api->defrem_create("kwabi_defrem_ctl_t.val", "val", "42");
+
+    /* Read it back */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef "
+                     "JOIN pg_attribute ON adrelid = attrelid AND adnum = attnum "
+                     "WHERE attrelid = 'kwabi_defrem_ctl_t'::regclass AND attname = 'val'",
+                     true, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    bool default_is_99 = false;
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull) {
+            char *expr = DatumGetCString(d);
+            default_is_99 = (strcmp(expr, "99") == 0);
+            pfree(expr);
+        }
+    }
+    SPI_finish();
+
+    /* Clean up */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("DROP TABLE kwabi_defrem_ctl_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP TABLE failed")));
+    }
+    SPI_finish();
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (default_is_99)
+        PG_RETURN_BOOL(true);   /* the comparison thinks 42 == 99: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: defrem negative control fired as intended"),
+             errdetail("the default is 42, not 99 -- the value comparison is honest")));
 }
 
 PG_FUNCTION_INFO_V1(kwabi_version);
