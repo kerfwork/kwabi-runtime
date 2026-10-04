@@ -1,0 +1,23 @@
+[package]
+name = "kwabi-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "kwabi runtime — per-version ABI adapter for PostgreSQL"
+license = "AGPL-3.0-or-later"
+
+[lib]
+name = "kwabi_runtime"
+# cdylib  — standalone shared object, used by the offline handoff proof.
+# staticlib — linked into the per-version bundle together with the C shim,
+#             which is the artifact PostgreSQL actually loads.
+# rlib    — lets the integration tests link the crate.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+kwabi = { path = "../rust-sdk" }
+
+[features]
+default = ["pg18"]
+pg16 = []
+pg17 = []
+pg18 = []
