@@ -6,14 +6,100 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  core:
+    name: Core tests
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        run: cargo test
+      - name: src/abi.rs matches kwabi.h
         run: |
-          echo "TODO: add build steps"
-      - name: Test
+          python3 gen_kwabi_struct.py ../kwabi.h > /tmp/kwabi_abi_check.rs
+          diff -q /tmp/kwabi_abi_check.rs src/abi.rs
+      - name: kwabi.h compiles standalone
+        run: cc -fsyntax-only -Wall -Wextra -x c ../kwabi.h
+
+  matrix:
+    name: PG ${{ matrix.pg }}
+    runs-on: macos-latest
+    needs: core
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["16", "17", "18"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install PostgreSQL ${{ matrix.pg }}
+        run: brew install postgresql@${{ matrix.pg }}
+
+      - name: Set paths
+        id: paths
         run: |
-          echo "TODO: add test steps"
+          PG=${{ matrix.pg }}
+          if [ "$PG" = "18" ]; then
+            echo "pg_config=/opt/homebrew/opt/postgresql@18/bin/pg_config" >> $GITHUB_OUTPUT
+            echo "pg_bin=/opt/homebrew/opt/postgresql@18/bin" >> $GITHUB_OUTPUT
+            echo "port=5432" >> $GITHUB_OUTPUT
+          else
+            echo "pg_config=/opt/homebrew/opt/postgresql@${PG}/bin/pg_config" >> $GITHUB_OUTPUT
+            echo "pg_bin=/opt/homebrew/opt/postgresql@${PG}/bin" >> $GITHUB_OUTPUT
+            if [ "$PG" = "16" ]; then
+              echo "port=5434" >> $GITHUB_OUTPUT
+            else
+              echo "port=5433" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Start PostgreSQL ${{ matrix.pg }}
+        run: |
+          PGBIN=${{ steps.paths.outputs.pg_bin }}
+          PORT=${{ steps.paths.outputs.port }}
+          DATA=${{ github.workspace }}/pg${{ matrix.pg }}/data
+          if [ ! -f "$DATA/PG_VERSION" ]; then
+            mkdir -p $(dirname $DATA)
+            $PGBIN/initdb -D $DATA -U $(whoami) --encoding=UTF8 --locale=C
+            printf '\nport = %s\nlisten_addresses = %s\nunix_socket_directories = %s\n' "$PORT" "'localhost'" "'/tmp'" >> $DATA/postgresql.conf
+          fi
+          LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" $PGBIN/pg_ctl -D $DATA -l $DATA/server.log start
+          sleep 2
+          $PGBIN/pg_isready -p $PORT
+
+      - name: Build and run proof (13 checks)
+        run: |
+          cd shim
+          make -s proof PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
+
+      - name: Run error firewall
+        run: |
+          cd shim
+          make -s try PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
+
+      - name: Run guarded bodies
+        run: |
+          cd shim
+          make -s guard-build PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
+          make -s guard-test PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
+
+      - name: Run capabilities consumer
+        run: |
+          cd shim
+          make -s cap-consumer PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
+
+      - name: Run mem-api
+        run: |
+          cd shim
+          make -s mem-api PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
+
+      - name: Run fmgr-api
+        run: |
+          cd shim
+          make -s fmgr PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
