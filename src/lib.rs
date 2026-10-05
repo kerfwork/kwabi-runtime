@@ -278,34 +278,28 @@ pub unsafe fn capabilities_of(t: *const KwabiV1, pg_major: u32) -> u64 {
     caps
 }
 
-/// The ABI slot: capabilities of the table this runtime published.
-unsafe extern "C" fn rt_capabilities() -> u64 {
-    let t = STABLE.get_or_init(build_table);
-    capabilities_of(t as *const KwabiV1, pg_major())
-}
-
 fn build_table() -> KwabiV1 {
-    let mut t = KwabiV1::default();
-    t.palloc = Some(rt_palloc);
-    t.palloc0 = Some(rt_palloc0);
-    t.repalloc = Some(rt_repalloc);
-    t.pfree = Some(rt_pfree);
-    t.memory_context_current = Some(rt_memory_context_current);
-    t.memory_context_switch_to = Some(rt_memory_context_switch_to);
-    t.memory_context_reset = Some(rt_memory_context_reset);
-    t.memory_context_delete = Some(rt_memory_context_delete);
-    t.error_message = Some(rt_error_message);
-    t.error_code = Some(rt_error_code);
-    t.error_clear = Some(rt_error_clear);
-    t.ereport = Some(rt_ereport);
-    t.elog = Some(rt_elog);
-
     // `memory_chunk_context`, `current_memory_context` and `raise_error` are
     // deliberately left null here. They are installed by the per-version C
     // shim, because `raise_error` raises a real PostgreSQL ERROR and must not
     // be entered from a Rust frame. A runtime running without its shim simply
     // reports those services as absent, which is the correct signal.
-    t
+    KwabiV1 {
+        palloc: Some(rt_palloc),
+        palloc0: Some(rt_palloc0),
+        repalloc: Some(rt_repalloc),
+        pfree: Some(rt_pfree),
+        memory_context_current: Some(rt_memory_context_current),
+        memory_context_switch_to: Some(rt_memory_context_switch_to),
+        memory_context_reset: Some(rt_memory_context_reset),
+        memory_context_delete: Some(rt_memory_context_delete),
+        error_message: Some(rt_error_message),
+        error_code: Some(rt_error_code),
+        error_clear: Some(rt_error_clear),
+        ereport: Some(rt_ereport),
+        elog: Some(rt_elog),
+        ..Default::default()
+    }
 }
 
 /// `ereport` through the ABI takes a pre-formatted message.
@@ -346,7 +340,6 @@ unsafe extern "C" fn rt_elog(level: c_int, msg: *const c_char, _varargs: *const 
 /// # Safety
 ///
 /// `table` must be null or point to a valid `KwabiV1`.
-#[no_mangle]
 pub unsafe extern "C" fn kwabi_capabilities_of(table: *const KwabiV1, pg_major: u32) -> u64 {
     capabilities_of(table, pg_major)
 }
