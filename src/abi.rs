@@ -140,6 +140,7 @@ pub struct KwabiV1 {
     pub type_is_composite: Option<unsafe extern "C" fn(u32) -> bool>,
     pub type_base_type: Option<unsafe extern "C" fn(u32) -> u32>,
     pub parse_expr: Option<unsafe extern "C" fn(*const c_char, *mut u32, c_int) -> *mut c_void>,
+    pub parse_stmt: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
     pub parse_type: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
     pub free_node: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub oper_left_type: Option<unsafe extern "C" fn(u32) -> u32>,
@@ -247,7 +248,7 @@ pub struct KwabiV1 {
     pub tuple_attisdropped: Option<unsafe extern "C" fn(*mut c_void, c_int) -> bool>,
     pub tuple_attnum: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int>,
     pub heap_tuple_getattr: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut c_void, *mut bool) -> usize>,
-    pub heap_tuple_setattr: Option<unsafe extern "C" fn(*mut c_void, c_int, usize, *mut c_void) -> ()>,
+    pub heap_tuple_setattr: Option<unsafe extern "C" fn(*mut c_void, c_int, usize, *mut c_void) -> *mut c_void>,
     pub heap_tuple_tableoid: Option<unsafe extern "C" fn(*mut c_void) -> u32>,
     pub heap_tuple_tid: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
     pub slot_isnull: Option<unsafe extern "C" fn(*mut c_void, c_int) -> bool>,
@@ -327,7 +328,7 @@ pub struct KwabiV1 {
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 204;
+    pub const FIELD_COUNT: usize = 205;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -358,6 +359,7 @@ impl Default for KwabiV1 {
             type_is_composite: None,
             type_base_type: None,
             parse_expr: None,
+            parse_stmt: None,
             parse_type: None,
             free_node: None,
             oper_left_type: None,

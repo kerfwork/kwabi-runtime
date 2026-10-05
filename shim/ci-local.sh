@@ -26,6 +26,21 @@ set -uo pipefail
 
 cd "$(dirname "$0")"
 
+# Platform-specific dynamic library suffix
+case "$(uname -s)" in
+    Darwin) DLSUFFIX=dylib ;;
+    *)      DLSUFFIX=so ;;
+esac
+
+# Portable SHA-256 helper
+SHA256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
 MAJORS_ALL=(16 17 18)
 
 # ---------------------------------------------------------------------------
@@ -33,19 +48,35 @@ MAJORS_ALL=(16 17 18)
 # ---------------------------------------------------------------------------
 
 pg_config_for() {
-    case "$1" in
-        16) echo "/opt/homebrew/opt/postgresql@16/bin/pg_config" ;;
-        17) echo "/opt/homebrew/opt/postgresql@17/bin/pg_config" ;;
-        18) echo "pg_config" ;;
-    esac
+    local major="$1"
+    # (a) env override: PG_CONFIG_pg16, PG_CONFIG_pg17, PG_config_pg18
+    local var="PG_CONFIG_pg$major"
+    if [ -n "${!var:-}" ]; then
+        echo "${!var}"
+        return
+    fi
+    # (b) command -v pg_config$major
+    if command -v "pg_config$major" >/dev/null 2>&1; then
+        echo "pg_config$major"
+        return
+    fi
+    # (c) macOS default
+    if [ -x "/opt/homebrew/opt/postgresql@$major/bin/pg_config" ]; then
+        echo "/opt/homebrew/opt/postgresql@$major/bin/pg_config"
+        return
+    fi
+    # (d) Linux default
+    if [ -x "/usr/lib/postgresql/$major/bin/pg_config" ]; then
+        echo "/usr/lib/postgresql/$major/bin/pg_config"
+        return
+    fi
+    return 1
 }
 
 pg_bin_for() {
-    case "$1" in
-        16) echo "/opt/homebrew/opt/postgresql@16/bin" ;;
-        17) echo "/opt/homebrew/opt/postgresql@17/bin" ;;
-        18) echo "$(pg_config --bindir)" ;;
-    esac
+    local pgc
+    pgc=$(pg_config_for "$1") || return 1
+    "$pgc" --bindir
 }
 
 port_for() {
@@ -59,6 +90,25 @@ port_for() {
 data_for() {
     echo "$(cd .. && pwd)/pg$1/data"
 }
+
+# The unix-socket directory differs by platform: macOS PostgreSQL defaults to
+# /tmp, Debian/Ubuntu to /var/run/postgresql. Probing for the directory is not
+# enough -- Debian creates /var/run/postgresql even when the server is listening
+# elsewhere -- so each candidate is probed for an actual socket file, and a
+# server already running on any candidate is found. An explicit PGHOST wins.
+PSOCK="${PGHOST:-}"
+if [ -z "$PSOCK" ]; then
+    for _d in /var/run/postgresql /tmp; do
+        if ls "$_d"/.s.PGSQL.* >/dev/null 2>&1; then
+            PSOCK="$_d"
+            break
+        fi
+    done
+    # No live socket anywhere: fall back to the platform default so the
+    # start-a-server path below has somewhere to look.
+    [ -z "$PSOCK" ] && { [ -d /var/run/postgresql ] && PSOCK=/var/run/postgresql || PSOCK=/tmp; }
+fi
+echo "socket dir   : $PSOCK"
 
 # ---------------------------------------------------------------------------
 # Reporting
@@ -120,8 +170,24 @@ else
     printf '%s\n' "$CARGO_OUT" | grep -E 'error|FAILED' | head -5 | sed 's/^/      /'
 fi
 
+# Locate the kwabi header, relative to the CRATE root (one level up from shim/).
+#
+# Two layouts exist and they must not be confused. The published repo vendors
+# the SDK crate and tracks exactly one header, vendor/kwabi/kwabi.h. The private
+# source tree additionally carries a stale copy at the crate root, which is NOT
+# the source of truth -- abi.rs is generated from the vendored one. So the
+# vendored paths are tried FIRST and the crate-root copy is only a fallback, or
+# a stale private copy would silently be treated as authoritative.
+KWABI_HDR=""
+for cand in vendor/kwabi/kwabi.h vendor/kwabi/include/kwabi.h kwabi.h; do
+    if [ -f "../$cand" ]; then KWABI_HDR="$cand"; break; fi
+done
+if [ -z "$KWABI_HDR" ]; then
+    record FAIL core "kwabi.h not found (looked in vendor/kwabi/ and the crate root)"
+fi
+
 echo "[core] src/abi.rs matches kwabi.h"
-if (cd .. && python3 gen_kwabi_struct.py ../kwabi.h > /tmp/kwabi_abi_check.rs \
+if [ -n "$KWABI_HDR" ] && (cd .. && python3 gen_kwabi_struct.py "$KWABI_HDR" > /tmp/kwabi_abi_check.rs \
       && diff -q /tmp/kwabi_abi_check.rs src/abi.rs >/dev/null); then
     record PASS core "src/abi.rs is current"
 else
@@ -129,7 +195,7 @@ else
 fi
 
 echo "[core] header compiles standalone"
-if cc -fsyntax-only -Wall -Wextra -x c "$(cd .. && pwd)/../kwabi.h" 2>/dev/null; then
+if [ -n "$KWABI_HDR" ] && cc -fsyntax-only -Wall -Wextra -x c "$(cd .. && pwd)/$KWABI_HDR" 2>/dev/null; then
     record PASS core "kwabi.h compiles"
 else
     record FAIL core "kwabi.h does not compile"
@@ -142,33 +208,38 @@ fi
 echo
 echo "[canary] build once"
 make -s canary >/dev/null 2>&1
-CANARY="../canary/libcanary.dylib"
+CANARY="../canary/libcanary.$DLSUFFIX"
 
 if [ ! -f "$CANARY" ]; then
     echo "FATAL: canary was not built"
     exit 1
 fi
 
-CANARY_HASH=$(shasum -a 256 "$CANARY" | cut -d' ' -f1)
+CANARY_HASH=$(SHA256 "$CANARY" | cut -d' ' -f1)
 echo "  path : $CANARY"
 echo "  hash : $CANARY_HASH"
 
 # The guarded-body canary is a second version-independent artifact. It must be
 # pinned the same way, or a major could quietly get its own copy.
-GUARDED_CANARY="../canary/guarded/target/release/libguarded_canary.dylib"
+GUARDED_CANARY="../canary/guarded/target/release/libguarded_canary.$DLSUFFIX"
 make -s guard-build >/dev/null 2>&1
 if [ ! -f "$GUARDED_CANARY" ]; then
     record FAIL canary "guarded canary was not built"
     exit 1
 fi
-GUARDED_HASH=$(shasum -a 256 "$GUARDED_CANARY" | cut -d' ' -f1)
+GUARDED_HASH=$(SHA256 "$GUARDED_CANARY" | cut -d' ' -f1)
 echo "  guarded: $GUARDED_HASH"
 
-UNDEF=$(nm -u "$CANARY" 2>/dev/null)
-if [ -z "$UNDEF" ]; then
-    record PASS canary "zero undefined symbols"
+# The claim is "links no PostgreSQL symbol", so that is what is asserted -- not
+# "zero undefined symbols". A macOS -shared object genuinely has none, which is
+# why the stricter form used to pass; a Linux shared object always carries a few
+# weak libc/init symbols (__cxa_finalize, __gmon_start__, the ITM clone table).
+BAD_SYMS=$(nm -u "$CANARY" 2>/dev/null \
+           | grep -iE 'palloc|pfree|elog|ereport|SPI_|heap_|_PG_|Relation|TupleDesc|MemoryContext' || true)
+if [ -z "$BAD_SYMS" ]; then
+    record PASS canary "references no PostgreSQL symbol"
 else
-    record FAIL canary "has undefined symbols: $UNDEF"
+    record FAIL canary "references PostgreSQL symbols: $BAD_SYMS"
 fi
 
 # ---------------------------------------------------------------------------
@@ -187,8 +258,19 @@ for M in "${MAJORS[@]}"; do
 
     # `command -v` handles bare names like `pg_config`; a `-x` test does not.
     if ! command -v "$PGC" >/dev/null 2>&1; then
-        echo "  skip: no pg_config for $M (brew install postgresql@$M)"
-        record SKIP "$M" "not installed"
+        # A DECLARED major that cannot be resolved is a FAIL, not a SKIP.
+        # Only undeclared majors (not in MAJORS_ALL) may SKIP.
+        declared=0
+        for dm in "${MAJORS_ALL[@]}"; do
+            [ "$dm" = "$M" ] && declared=1 && break
+        done
+        if [ $declared -eq 1 ]; then
+            echo "  FAIL: no pg_config for declared major $M"
+            record FAIL "$M" "pg_config not found (declared major)"
+        else
+            echo "  skip: no pg_config for $M (not a declared major)"
+            record SKIP "$M" "not installed"
+        fi
         continue
     fi
 
@@ -204,12 +286,12 @@ for M in "${MAJORS[@]}"; do
     fi
 
     # --- the pinned canary must not have been rebuilt -------------------
-    NOW=$(shasum -a 256 "$CANARY" | cut -d' ' -f1)
+    NOW=$(SHA256 "$CANARY" | cut -d' ' -f1)
     if [ "$NOW" != "$CANARY_HASH" ]; then
         record FAIL "$M" "canary was rebuilt — build-once violated"
         continue
     fi
-    GNOW=$(shasum -a 256 "$GUARDED_CANARY" | cut -d' ' -f1)
+    GNOW=$(SHA256 "$GUARDED_CANARY" | cut -d' ' -f1)
     if [ "$GNOW" != "$GUARDED_HASH" ]; then
         record FAIL "$M" "guarded canary was rebuilt — build-once violated"
         continue
@@ -231,7 +313,7 @@ for M in "${MAJORS[@]}"; do
         echo "      see: cd ../canary/guarded && cargo build --release"
         continue
     fi
-    if [ ! -f "$PKGLIB/libguarded_canary.dylib" ]; then
+    if [ ! -f "$PKGLIB/libguarded_canary.$DLSUFFIX" ]; then
         record FAIL "$M" "guarded canary not installed into $PKGLIB"
         continue
     fi
@@ -249,7 +331,7 @@ for M in "${MAJORS[@]}"; do
     fi
 
     # --- is a server listening? -----------------------------------------
-    if ! "$PGB/pg_isready" -p "$PORT" -q 2>/dev/null; then
+    if ! "$PGB/pg_isready" -h "$PSOCK" -p "$PORT" -q 2>/dev/null; then
         echo "  no server on :$PORT — attempting to start"
         DATA=$(data_for "$M")
         if [ -f "$DATA/PG_VERSION" ]; then
@@ -259,7 +341,7 @@ for M in "${MAJORS[@]}"; do
         fi
     fi
 
-    if ! "$PGB/pg_isready" -p "$PORT" -q 2>/dev/null; then
+    if ! "$PGB/pg_isready" -h "$PSOCK" -p "$PORT" -q 2>/dev/null; then
         record SKIP "$M" "no server on :$PORT"
         continue
     fi
@@ -267,9 +349,9 @@ for M in "${MAJORS[@]}"; do
     # --- the 13 checks ---------------------------------------------------
     echo "  [proof] 13 checks against :$PORT"
     OUT=/tmp/kwabi_proof_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
-        -v canary="libcanary.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -v canary="libcanary.$DLSUFFIX" \
         -v libdir="$PKGLIB" \
         -f proof.sql postgres >"$OUT" 2>&1
 
@@ -299,9 +381,9 @@ for M in "${MAJORS[@]}"; do
     # would pass every other check here.
     echo "  [try] error firewall against :$PORT"
     OUT=/tmp/kwabi_try_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
-        -v canary="libcanary.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -v canary="libcanary.$DLSUFFIX" \
         -v libdir="$PKGLIB" \
         -f try.sql postgres >"$OUT" 2>&1
 
@@ -326,10 +408,10 @@ for M in "${MAJORS[@]}"; do
     # takes the postmaster down. See guard-control.sql.
     echo "  [guard] panic containment against :$PORT"
     OUT=/tmp/kwabi_guard_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
         -v libdir="$PKGLIB" \
-        -v guarded="libguarded_canary.dylib" \
+        -v guarded="libguarded_canary.$DLSUFFIX" \
         -f guard-test.sql postgres >"$OUT" 2>&1
 
     GUARD_PANIC=$(grep -c "status=2 " "$OUT")
@@ -355,9 +437,9 @@ for M in "${MAJORS[@]}"; do
     # all-ones passes the first and fails the second.
     echo "  [capabilities] bitset honesty against :$PORT"
     OUT=/tmp/kwabi_caps_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=1 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
-        -v canary="$PKGLIB/libguarded_canary.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=1 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -v canary="$PKGLIB/libguarded_canary.$DLSUFFIX" \
         -f capabilities.sql postgres >"$OUT" 2>&1
 
     # All seven assertions true.
@@ -379,9 +461,9 @@ for M in "${MAJORS[@]}"; do
     # --- type-api: type system through the ABI ---------------------------
     echo "  [type-api] type system against :$PORT"
     OUT=/tmp/kwabi_type_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
-        -v canary="libcanary.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -v canary="libcanary.$DLSUFFIX" \
         -v libdir="$PKGLIB" \
         -f type-api.sql postgres >"$OUT" 2>&1
 
@@ -416,10 +498,10 @@ for M in "${MAJORS[@]}"; do
     # above stays green.
     echo "  [capabilities] consumed by an extension against :$PORT"
     OUT=/tmp/kwabi_capconsume_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=1 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=1 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
         -v libdir="$PKGLIB" \
-        -v guarded="libguarded_canary.dylib" \
+        -v guarded="libguarded_canary.$DLSUFFIX" \
         -f capability-consumer.sql postgres >"$OUT" 2>&1
 
     CC_TRUE=$(grep -cE '^ t *$' "$OUT")
@@ -448,8 +530,8 @@ for M in "${MAJORS[@]}"; do
     # ON_ERROR_STOP is off: the negative control (check 4) raises by design.
     echo "  [mem-api] memory context lifecycle against :$PORT"
     OUT=/tmp/kwabi_memapi_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
         -f mem-api.sql postgres >"$OUT" 2>&1
 
     MEM_TRUE=$(grep -cE '^ t *$' "$OUT")
@@ -487,8 +569,8 @@ for M in "${MAJORS[@]}"; do
     # ON_ERROR_STOP is off: check 8 (the negative control) raises by design.
     echo "  [fmgr-api] function calls against :$PORT"
     OUT=/tmp/kwabi_fmgr_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
         -f fmgr-api.sql postgres >"$OUT" 2>&1
 
     FMGR_TRUE=$(grep -cE '^ t *$' "$OUT")
@@ -524,8 +606,8 @@ for M in "${MAJORS[@]}"; do
     # ON_ERROR_STOP is off: check 8 (the negative control) raises by design.
     echo "  [guc-api] GUC access against :$PORT"
     OUT=/tmp/kwabi_guc_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
         -f guc-api.sql postgres >"$OUT" 2>&1
 
     GUC_TRUE=$(grep -cE '^ t *$' "$OUT")
@@ -555,8 +637,8 @@ for M in "${MAJORS[@]}"; do
     # ON_ERROR_STOP is off: check 5 (the negative control) raises by design.
     echo "  [defrem-api] column defaults against :$PORT"
     OUT=/tmp/kwabi_defrem_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
         -f defrem-api.sql postgres >"$OUT" 2>&1
 
     DEFREM_TRUE=$(grep -cE '^ t *$' "$OUT")
@@ -585,8 +667,8 @@ for M in "${MAJORS[@]}"; do
     # ON_ERROR_STOP is off: check 5 (the negative control) raises by design.
     echo "  [spi-api] SQL execution against :$PORT"
     OUT=/tmp/kwabi_spi_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=0 \
-        -v bundle="kwabi_runtime_pg$M.dylib" \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
         -f spi-api.sql postgres >"$OUT" 2>&1
 
     SPI_TRUE=$(grep -cE '^ t *$' "$OUT")
@@ -607,6 +689,132 @@ for M in "${MAJORS[@]}"; do
         echo "      see $OUT"
     fi
 
+    # --- parser-api: parser slots through the ABI -------------------------
+    #
+    # The parser group: parse expressions, parse type names, query operator
+    # properties. The assertion that matters is `parse_expr_works` -- it
+    # proves that parse_expr, node_type_name, and free_node all work together.
+    #
+    # ON_ERROR_STOP is off: check 10 (the negative control) raises by design.
+    echo "  [parser-api] parser slots against :$PORT"
+    OUT=/tmp/kwabi_parser_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f parser-api.sql postgres >"$OUT" 2>&1
+
+    PARSER_TRUE=$(grep -cE '^ t *$' "$OUT")
+    PARSER_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    PARSER_CONTROL=$(grep -c "parser negative control fired as intended" "$OUT")
+    # The three that carry the meaning, so a failure says which.
+    PARSER_EXPR=$(grep -A2 'parse_expr_works' "$OUT" | grep -cE '^ t')
+    PARSER_TYPE=$(grep -A2 'parse_type_works' "$OUT" | grep -cE '^ t')
+    PARSER_OPER=$(grep -A2 'oper_left_type_int4' "$OUT" | grep -cE '^ t')
+
+    if [ "$PARSER_FALSE" -eq 0 ] && [ "$PARSER_CONTROL" -ge 1 ] && \
+       [ "$PARSER_EXPR" -ge 1 ] && [ "$PARSER_TYPE" -ge 1 ] && \
+       [ "$PARSER_OPER" -ge 1 ]; then
+        record PASS "$M" "parser-api green ($PARSER_TRUE assertions)"
+    else
+        record FAIL "$M" "parser-api: true=$PARSER_TRUE false=$PARSER_FALSE control=$PARSER_CONTROL expr=$PARSER_EXPR type=$PARSER_TYPE oper=$PARSER_OPER"
+        echo "      see $OUT"
+    fi
+
+    # --- node-tree-api: node tree traversal through the ABI ----------------
+    #
+    # The node tree group: parse SQL, walk the resulting node tree, and
+    # inspect query and plan structures. The assertion that matters is
+    # `node_type_query` -- it proves that a parsed statement's node type
+    # can be read through the ABI.
+    #
+    # ON_ERROR_STOP is off: check 12 (the negative control) raises by design.
+    echo "  [node-tree-api] node tree traversal against :$PORT"
+    OUT=/tmp/kwabi_nodetree_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f node-tree-api.sql postgres >"$OUT" 2>&1
+
+    NT_TRUE=$(grep -cE '^ t *$' "$OUT")
+    NT_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    NT_CONTROL=$(grep -c "node tree negative control fired as intended" "$OUT")
+    # The three that carry the meaning, so a failure says which.
+    NT_TYPE=$(grep -A2 'node_type_query' "$OUT" | grep -cE '^ t')
+    NT_NAME=$(grep -A2 'node_type_name_query' "$OUT" | grep -cE '^ t')
+    NT_CMD=$(grep -A2 'command_type_select' "$OUT" | grep -cE '^ t')
+
+    if [ "$NT_FALSE" -eq 0 ] && [ "$NT_CONTROL" -ge 1 ] && \
+       [ "$NT_TYPE" -ge 1 ] && [ "$NT_NAME" -ge 1 ] && [ "$NT_CMD" -ge 1 ]; then
+        record PASS "$M" "node-tree-api green ($NT_TRUE assertions)"
+    else
+        record FAIL "$M" "node-tree-api: true=$NT_TRUE false=$NT_FALSE control=$NT_CONTROL type=$NT_TYPE name=$NT_NAME cmd=$NT_CMD"
+        echo "      see $OUT"
+    fi
+
+    # --- tuple-api: tuple/slot access through the ABI ---------------------
+    #
+    # The tuple/slot group: tuple descriptor accessors, heap tuple accessors,
+    # and slot accessors. The assertion that matters is `tuple_desc_accessors`
+    # -- it proves that tuple_natts, tuple_typeid, tuple_typmod, tuple_attname,
+    # tuple_attisdropped, and tuple_attnum all return correct values through
+    # the ABI.
+    #
+    # ON_ERROR_STOP is off: check 5 (the negative control) raises by design.
+    echo "  [tuple-api] tuple/slot access against :$PORT"
+    OUT=/tmp/kwabi_tuple_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f tuple-api.sql postgres >"$OUT" 2>&1
+
+    TUPLE_TRUE=$(grep -cE '^ t *$' "$OUT")
+    TUPLE_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    TUPLE_CONTROL=$(grep -c "tuple negative control fired as intended" "$OUT")
+    # The three that carry the meaning, so a failure says which.
+    TUPLE_DESC=$(grep -A2 'tuple_desc_accessors' "$OUT" | grep -cE '^ t')
+    TUPLE_HEAP=$(grep -A2 'heap_tuple_accessors' "$OUT" | grep -cE '^ t')
+    TUPLE_SLOT=$(grep -A2 'slot_accessors' "$OUT" | grep -cE '^ t')
+
+    if [ "$TUPLE_FALSE" -eq 0 ] && [ "$TUPLE_CONTROL" -ge 1 ] && \
+       [ "$TUPLE_DESC" -ge 1 ] && [ "$TUPLE_HEAP" -ge 1 ] && \
+       [ "$TUPLE_SLOT" -ge 1 ]; then
+        record PASS "$M" "tuple-api green ($TUPLE_TRUE assertions)"
+    else
+        record FAIL "$M" "tuple-api: true=$TUPLE_TRUE false=$TUPLE_FALSE control=$TUPLE_CONTROL desc=$TUPLE_DESC heap=$TUPLE_HEAP slot=$TUPLE_SLOT"
+        echo "      see $OUT"
+    fi
+
+    # --- relation-api: relation cache slots through the ABI ----------------
+    #
+    # The relation cache group: open a relation, read its metadata (name,
+    # namespace, relkind, relam, tupledesc, index list), and close it. The
+    # assertion that matters is `relation_open_name` -- it proves that
+    # relation_open, relation_name, and relation_close all work together.
+    #
+    # ON_ERROR_STOP is off: check 13 (the negative control) raises by design.
+    echo "  [relation-api] relation cache against :$PORT"
+    OUT=/tmp/kwabi_relation_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f relation-api.sql postgres >"$OUT" 2>&1
+
+    REL_TRUE=$(grep -cE '^ t *$' "$OUT")
+    REL_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    REL_CONTROL=$(grep -c "relation negative control fired as intended" "$OUT")
+    # The three that carry the meaning, so a failure says which.
+    REL_OPEN=$(grep -A2 'relation_open_name' "$OUT" | grep -cE '^ t')
+    REL_ID=$(grep -A2 'relation_id' "$OUT" | grep -cE '^ t')
+    REL_KIND=$(grep -A2 'rel_relkind' "$OUT" | grep -cE '^ t')
+
+    if [ "$REL_FALSE" -eq 0 ] && [ "$REL_CONTROL" -ge 1 ] && \
+       [ "$REL_OPEN" -ge 1 ] && [ "$REL_ID" -ge 1 ] && [ "$REL_KIND" -ge 1 ]; then
+        record PASS "$M" "relation-api green ($REL_TRUE assertions)"
+    else
+        record FAIL "$M" "relation-api: true=$REL_TRUE false=$REL_FALSE control=$REL_CONTROL open=$REL_OPEN id=$REL_ID kind=$REL_KIND"
+        echo "      see $OUT"
+    fi
+
     # --- structured error channel: cross-version safety ------------------
     #
     # A v1 caller's smaller struct must not be overrun by a v2 writer. This is
@@ -615,8 +823,8 @@ for M in "${MAJORS[@]}"; do
     # errsize.c is the assertion; `overrun_bytes=0` is the result.
     echo "  [errsize] cross-version error channel against :$PORT"
     OUT=/tmp/kwabi_errsize_$M.log
-    "$PGB/psql" -p "$PORT" -v ON_ERROR_STOP=1 \
-        -v module='errsize.dylib' \
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=1 \
+        -v module="errsize.$DLSUFFIX" \
         -f ../errsize/errsize.sql postgres >"$OUT" 2>&1
 
     ERR_V1=$(grep -c "v1 caller: .*overrun_bytes=0" "$OUT")

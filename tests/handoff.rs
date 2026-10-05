@@ -215,7 +215,7 @@ fn table_layout_is_stable() {
     // Appended slots move this number. That is the intended workflow for an
     // append-only ABI, and this assertion is what makes the change deliberate:
     // it cannot happen by accident.
-    assert_eq!(KwabiV1::FIELD_COUNT, 204, "field count changed — kwabi.h edited?");
+    assert_eq!(KwabiV1::FIELD_COUNT, 205, "field count changed — kwabi.h edited?");
 }
 
 /// The SDK's hand-written mirror must match the header, field for field.

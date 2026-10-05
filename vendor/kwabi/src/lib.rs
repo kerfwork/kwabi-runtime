@@ -44,7 +44,7 @@ pub mod guarded;
 /// Re-export the `#[guarded_body]` attribute macro.
 pub use kwabi_macros::{guarded_body, require_unwind};
 
-use std::ffi::{CStr, CString};
+use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
@@ -93,16 +93,16 @@ pub struct KwabiV1 {
     // calling it, and a bare function-pointer field cannot express absence.
     // These five are wired by the per-version shim (they can raise, and the
     // error firewall forbids a Rust frame between a PG_TRY and a raising call).
-    pub spi_execute: Option<unsafe extern "C" fn(*const i8, bool, i32) -> *mut KwabiSPIResult>,
+    pub spi_execute: Option<unsafe extern "C" fn(*const c_char, bool, i32) -> *mut KwabiSPIResult>,
     pub spi_execute_plan: Option<
-        unsafe extern "C" fn(*mut KwabiSPIPlan, *mut u64, *const i8, bool, i32) -> *mut KwabiSPIResult,
+        unsafe extern "C" fn(*mut KwabiSPIPlan, *mut u64, *const c_char, bool, i32) -> *mut KwabiSPIResult,
     >,
     pub spi_free_result: Option<unsafe extern "C" fn(*mut KwabiSPIResult)>,
     pub spi_result_ntuples: Option<unsafe extern "C" fn(*mut KwabiSPIResult) -> i32>,
     pub spi_result_get_value: Option<unsafe extern "C" fn(*mut KwabiSPIResult, i32, i32) -> u64>,
     // Type system
-    pub type_input: extern "C" fn(u32, *const i8, i32) -> u64,
-    pub type_output: extern "C" fn(u32, u64) -> *mut i8,
+    pub type_input: extern "C" fn(u32, *const c_char, i32) -> u64,
+    pub type_output: extern "C" fn(u32, u64) -> *mut c_char,
     pub type_recv: extern "C" fn(u32, *mut std::ffi::c_void) -> u64,
     pub type_send: extern "C" fn(u32, u64, *mut std::ffi::c_void),
     pub type_element_type: extern "C" fn(u32) -> u32,
@@ -111,17 +111,18 @@ pub struct KwabiV1 {
     pub type_is_composite: extern "C" fn(u32) -> bool,
     pub type_base_type: extern "C" fn(u32) -> u32,
     // Parser
-    pub parse_expr: extern "C" fn(*const i8, *mut u32, i32) -> *mut KwabiNode,
-    pub parse_type: extern "C" fn(*const i8) -> *mut KwabiNode,
+    pub parse_expr: extern "C" fn(*const c_char, *mut u32, i32) -> *mut KwabiNode,
+    pub parse_stmt: extern "C" fn(*const c_char) -> *mut KwabiNode,
+    pub parse_type: extern "C" fn(*const c_char) -> *mut KwabiNode,
     pub free_node: extern "C" fn(*mut KwabiNode),
     pub oper_left_type: extern "C" fn(u32) -> u32,
     pub oper_right_type: extern "C" fn(u32) -> u32,
     pub oper_result_type: extern "C" fn(u32) -> u32,
     pub oper_is_commutative: extern "C" fn(u32) -> bool,
     // Commands
-    pub extension_oid: extern "C" fn(*const i8) -> u32,
-    pub extension_installed: extern "C" fn(*const i8) -> bool,
-    pub extension_version: extern "C" fn(*const i8) -> *const i8,
+    pub extension_oid: extern "C" fn(*const c_char) -> u32,
+    pub extension_installed: extern "C" fn(*const c_char) -> bool,
+    pub extension_version: extern "C" fn(*const c_char) -> *const c_char,
     pub sequence_nextval: extern "C" fn(u32) -> i64,
     pub sequence_currval: extern "C" fn(u32) -> i64,
     pub sequence_setval: extern "C" fn(u32, i64) -> i64,
@@ -134,7 +135,7 @@ pub struct KwabiV1 {
     pub output_plugin_shutdown: extern "C" fn(*mut std::ffi::c_void),
     // Background workers
     pub bgworker_register: extern "C" fn(
-        *const i8,
+        *const c_char,
         extern "C" fn(*mut std::ffi::c_void),
         *mut std::ffi::c_void,
     ) -> u32,
@@ -144,9 +145,9 @@ pub struct KwabiV1 {
     pub block_get_number: extern "C" fn(*mut std::ffi::c_void) -> u32,
     pub block_get_offset: extern "C" fn(*mut std::ffi::c_void) -> u16,
     pub block_is_valid: extern "C" fn(*mut std::ffi::c_void) -> bool,
-    pub slru_create: extern "C" fn(*const i8, i32, i32),
-    pub slru_read: extern "C" fn(*const i8, i64, *mut std::ffi::c_void),
-    pub slru_write: extern "C" fn(*const i8, i64, *const std::ffi::c_void),
+    pub slru_create: extern "C" fn(*const c_char, i32, i32),
+    pub slru_read: extern "C" fn(*const c_char, i64, *mut std::ffi::c_void),
+    pub slru_write: extern "C" fn(*const c_char, i64, *const std::ffi::c_void),
     // Value nodes
     pub value_is_null: extern "C" fn(*mut KwabiValue) -> bool,
     pub value_get_datum: extern "C" fn(*mut KwabiValue) -> u64,
@@ -162,21 +163,21 @@ pub struct KwabiV1 {
     pub memory_context_reset: Option<unsafe extern "C" fn(*mut KwabiMemoryContext)>,
     pub memory_context_delete: Option<unsafe extern "C" fn(*mut KwabiMemoryContext)>,
     // Error handling
-    pub ereport: extern "C" fn(i32, *const i8, ...),
-    pub elog: extern "C" fn(i32, *const i8, ...),
-    pub error_message: extern "C" fn() -> *const i8,
+    pub ereport: extern "C" fn(i32, *const c_char, ...),
+    pub elog: extern "C" fn(i32, *const c_char, ...),
+    pub error_message: extern "C" fn() -> *const c_char,
     pub error_code: extern "C" fn() -> i32,
     pub error_clear: extern "C" fn(),
     // Relation cache
     pub relation_open: extern "C" fn(u32, u32) -> *mut KwabiRelation,
     pub relation_close: extern "C" fn(*mut KwabiRelation, u32),
     pub relation_id: extern "C" fn(*mut KwabiRelation) -> u32,
-    pub relation_name: extern "C" fn(*mut KwabiRelation) -> *const i8,
+    pub relation_name: extern "C" fn(*mut KwabiRelation) -> *const c_char,
     pub relation_namespace: extern "C" fn(*mut KwabiRelation) -> u32,
     pub relation_tupledesc: extern "C" fn(*mut KwabiRelation) -> *mut std::ffi::c_void,
     // System cache
-    pub syscache_get_oid: extern "C" fn(*const i8, *const i8, u64) -> u32,
-    pub syscache_get_tuple: extern "C" fn(*const i8, u64) -> *mut std::ffi::c_void,
+    pub syscache_get_oid: extern "C" fn(*const c_char, *const c_char, u64) -> u32,
+    pub syscache_get_tuple: extern "C" fn(*const c_char, u64) -> *mut std::ffi::c_void,
     pub syscache_free_tuple: extern "C" fn(*mut std::ffi::c_void),
     // Optimizer
     pub planner_info:
@@ -193,7 +194,7 @@ pub struct KwabiV1 {
     // Storage
     pub shmem_alloc: extern "C" fn(usize) -> *mut std::ffi::c_void,
     pub shmem_free: extern "C" fn(*mut std::ffi::c_void),
-    pub shmem_get: extern "C" fn(*const i8, usize) -> *mut std::ffi::c_void,
+    pub shmem_get: extern "C" fn(*const c_char, usize) -> *mut std::ffi::c_void,
     pub lock_acquire: extern "C" fn(*mut std::ffi::c_void, u32),
     pub lock_release: extern "C" fn(*mut std::ffi::c_void),
     pub lock_held_by_me: extern "C" fn(*mut std::ffi::c_void) -> bool,
@@ -202,10 +203,10 @@ pub struct KwabiV1 {
     // Postmaster
     pub autovacuum_is_running: extern "C" fn() -> bool,
     pub autovacuum_naptime: extern "C" fn() -> i32,
-    pub syslogger_log: extern "C" fn(*const i8),
+    pub syslogger_log: extern "C" fn(*const c_char),
     // WAL replication
-    pub walsender_send: extern "C" fn(*const i8, i32),
-    pub walsender_receive: extern "C" fn(*mut i8, i32) -> i32,
+    pub walsender_send: extern "C" fn(*const c_char, i32),
+    pub walsender_receive: extern "C" fn(*mut c_char, i32) -> i32,
     pub walsender_is_connected: extern "C" fn() -> bool,
     // Commands (defrem)
     //
@@ -214,12 +215,12 @@ pub struct KwabiV1 {
     // calling it, and a bare function-pointer field cannot express absence.
     // These three are wired by the per-version shim (they can raise, and the
     // error firewall forbids a Rust frame between a PG_TRY and a raising call).
-    pub defrem_create: Option<unsafe extern "C" fn(*const i8, *const i8, *const i8)>,
-    pub defrem_alter: Option<unsafe extern "C" fn(*const i8, *const i8)>,
-    pub defrem_drop: Option<unsafe extern "C" fn(*const i8)>,
+    pub defrem_create: Option<unsafe extern "C" fn(*const c_char, *const c_char, *const c_char)>,
+    pub defrem_alter: Option<unsafe extern "C" fn(*const c_char, *const c_char)>,
+    pub defrem_drop: Option<unsafe extern "C" fn(*const c_char)>,
     // Node trees
     pub node_type: extern "C" fn(*mut KwabiNode) -> u32,
-    pub node_type_name: extern "C" fn(*mut KwabiNode) -> *const i8,
+    pub node_type_name: extern "C" fn(*mut KwabiNode) -> *const c_char,
     pub node_get_list: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
     pub node_list_length: extern "C" fn(*mut KwabiNode) -> i32,
     pub node_list_get: extern "C" fn(*mut KwabiNode, i32) -> *mut KwabiNode,
@@ -244,12 +245,12 @@ pub struct KwabiV1 {
     pub tuple_natts: extern "C" fn(*mut std::ffi::c_void) -> i32,
     pub tuple_typeid: extern "C" fn(*mut std::ffi::c_void, i32) -> u32,
     pub tuple_typmod: extern "C" fn(*mut std::ffi::c_void, i32) -> i32,
-    pub tuple_attname: extern "C" fn(*mut std::ffi::c_void, i32) -> *const i8,
+    pub tuple_attname: extern "C" fn(*mut std::ffi::c_void, i32) -> *const c_char,
     pub tuple_attisdropped: extern "C" fn(*mut std::ffi::c_void, i32) -> bool,
-    pub tuple_attnum: extern "C" fn(*mut std::ffi::c_void, *const i8) -> i32,
+    pub tuple_attnum: extern "C" fn(*mut std::ffi::c_void, *const c_char) -> i32,
     pub heap_tuple_getattr:
         extern "C" fn(*mut std::ffi::c_void, i32, *mut std::ffi::c_void, *mut bool) -> u64,
-    pub heap_tuple_setattr: extern "C" fn(*mut std::ffi::c_void, i32, u64, *mut std::ffi::c_void),
+    pub heap_tuple_setattr: extern "C" fn(*mut std::ffi::c_void, i32, u64, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
     pub heap_tuple_tableoid: extern "C" fn(*mut std::ffi::c_void) -> u32,
     pub heap_tuple_tid: extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void,
     pub slot_isnull: extern "C" fn(*mut std::ffi::c_void, i32) -> bool,
@@ -295,24 +296,24 @@ pub struct KwabiV1 {
     // calling it, and a bare function-pointer field cannot express absence.
     // These eight are wired by the per-version shim (they can raise, and the
     // error firewall forbids a Rust frame between a PG_TRY and a raising call).
-    pub guc_get_int: Option<unsafe extern "C" fn(*const i8) -> i32>,
-    pub guc_get_string: Option<unsafe extern "C" fn(*const i8) -> *const i8>,
-    pub guc_get_bool: Option<unsafe extern "C" fn(*const i8) -> bool>,
-    pub guc_get_float: Option<unsafe extern "C" fn(*const i8) -> f64>,
-    pub guc_set_int: Option<unsafe extern "C" fn(*const i8, i32)>,
-    pub guc_set_string: Option<unsafe extern "C" fn(*const i8, *const i8)>,
-    pub guc_set_bool: Option<unsafe extern "C" fn(*const i8, bool)>,
-    pub guc_set_float: Option<unsafe extern "C" fn(*const i8, f64)>,
+    pub guc_get_int: Option<unsafe extern "C" fn(*const c_char) -> i32>,
+    pub guc_get_string: Option<unsafe extern "C" fn(*const c_char) -> *const c_char>,
+    pub guc_get_bool: Option<unsafe extern "C" fn(*const c_char) -> bool>,
+    pub guc_get_float: Option<unsafe extern "C" fn(*const c_char) -> f64>,
+    pub guc_set_int: Option<unsafe extern "C" fn(*const c_char, i32)>,
+    pub guc_set_string: Option<unsafe extern "C" fn(*const c_char, *const c_char)>,
+    pub guc_set_bool: Option<unsafe extern "C" fn(*const c_char, bool)>,
+    pub guc_set_float: Option<unsafe extern "C" fn(*const c_char, f64)>,
     // Explain
     pub explain_query: extern "C" fn(
         *mut std::ffi::c_void,
         *mut std::ffi::c_void,
         *mut std::ffi::c_void,
-        *const i8,
+        *const c_char,
         *mut std::ffi::c_void,
         *mut std::ffi::c_void,
     ),
-    pub explain_get_index_name: extern "C" fn(u32) -> *const i8,
+    pub explain_get_index_name: extern "C" fn(u32) -> *const c_char,
     // Vacuum
     pub vacuum_rel:
         extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void),
@@ -338,7 +339,7 @@ pub struct KwabiV1 {
     pub itempointer_is_valid: extern "C" fn(*mut std::ffi::c_void) -> bool,
     // Relations
     pub rel_id: extern "C" fn(*mut KwabiRelation) -> u32,
-    pub rel_name: extern "C" fn(*mut KwabiRelation) -> *const i8,
+    pub rel_name: extern "C" fn(*mut KwabiRelation) -> *const c_char,
     pub rel_namespace: extern "C" fn(*mut KwabiRelation) -> u32,
     pub rel_relkind: extern "C" fn(*mut KwabiRelation) -> i8,
     pub rel_relam: extern "C" fn(*mut KwabiRelation) -> u32,
@@ -347,10 +348,10 @@ pub struct KwabiV1 {
     // String info
     pub stringinfo_init: extern "C" fn(*mut std::ffi::c_void),
     pub stringinfo_reset: extern "C" fn(*mut std::ffi::c_void),
-    pub stringinfo_append: extern "C" fn(*mut std::ffi::c_void, *const i8),
+    pub stringinfo_append: extern "C" fn(*mut std::ffi::c_void, *const c_char),
     pub stringinfo_append_char: extern "C" fn(*mut std::ffi::c_void, i8),
     pub stringinfo_append_int: extern "C" fn(*mut std::ffi::c_void, i64),
-    pub stringinfo_data: extern "C" fn(*mut std::ffi::c_void) -> *const i8,
+    pub stringinfo_data: extern "C" fn(*mut std::ffi::c_void) -> *const c_char,
     pub stringinfo_len: extern "C" fn(*mut std::ffi::c_void) -> i32,
 
     // ---- appended after stringinfo (mirrors kwabi.h) ---------------------
@@ -373,7 +374,7 @@ pub struct KwabiV1 {
     pub memory_chunk_context:
         Option<unsafe extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>,
     pub current_memory_context: Option<unsafe extern "C" fn() -> *mut std::ffi::c_void>,
-    pub raise_error: Option<unsafe extern "C" fn(i32, *const i8)>,
+    pub raise_error: Option<unsafe extern "C" fn(i32, *const c_char)>,
     pub try_body: Option<
         unsafe extern "C" fn(
             guarded::KwabiBodyFn,
@@ -383,7 +384,7 @@ pub struct KwabiV1 {
     >,
     pub error_get: Option<unsafe extern "C" fn(*mut guarded::KwabiErrorAbi)>,
     pub capabilities: Option<unsafe extern "C" fn() -> u64>,
-    pub memory_context_create: Option<unsafe extern "C" fn(*const i8) -> *mut KwabiMemoryContext>,
+    pub memory_context_create: Option<unsafe extern "C" fn(*const c_char) -> *mut KwabiMemoryContext>,
 }
 
 // Opaque handle types

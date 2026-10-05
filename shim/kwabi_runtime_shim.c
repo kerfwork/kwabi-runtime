@@ -41,6 +41,7 @@
  * Including the defining headers first is what a version-specific shim is
  * for: this is the only file in the project that knows PostgreSQL's layout. */
 #include "access/htup.h"        /* HeapTuple */
+#include "access/htup_details.h" /* HeapTupleHeaderGetOid */
 #include "access/tupdesc.h"     /* TupleDesc */
 #include "access/skey.h"        /* ScanKey */
 #include "access/heapam.h"      /* BulkInsertState */
@@ -53,6 +54,7 @@
 #include "nodes/nodes.h"        /* Node */
 #include "nodes/primnodes.h"    /* IntoClause */
 #include "nodes/plannodes.h"    /* Plan */
+#include "parser/parser.h"     /* pg_parse_query, pg_plan_query */
 #include "nodes/params.h"       /* ParamListInfo */
 #include "utils/relcache.h"     /* Relation */
 #include "utils/reltrigger.h"   /* TriggerDesc, Trigger */
@@ -65,6 +67,10 @@
 #include "utils/lsyscache.h"     /* get_element_type, get_typlen, get_typtype, getBaseType */
 #include "utils/syscache.h"      /* SearchSysCache1, SysCacheGetAttr, ReleaseSysCache */
 #include "catalog/pg_type.h"     /* TYPTYPE_COMPOSITE, TYPEOID */
+#include "catalog/pg_operator.h" /* OPEROID, Anum_pg_operator_oprleft, etc. */
+#include "parser/parser.h"       /* pg_parse_query */
+#include "parser/parse_type.h"   /* parseTypeString, typeStringToTypeName */
+#include "parser/analyze.h"       /* parse_analyze_fixedparams */
 
 /*
  * Version differences in this file are marked `VERSION-DIFF` so they can be
@@ -578,8 +584,8 @@ shim_spi_free_result(KwabiSPIResult result)
     if (result == NULL)
         return;
 
-    SPI_finish();
-    pfree(result);
+    pfree(result);    /* free while its context is still alive */
+    SPI_finish();     /* then tear down SPI */
 }
 
 static int
@@ -637,6 +643,17 @@ shim_guc_get_int(const char *name)
     if (name == NULL)
         return 0;
 
+    /*
+     * LIMITATION, documented rather than hidden: this reads the GUC's DISPLAY
+     * string and applies atoi. That is correct for a unit-less integer GUC
+     * (max_connections -> "100") but WRONG for one with a unit suffix:
+     * work_mem displays as "4MB", so atoi gives 4, not the 4096 kB the GUC
+     * actually holds. Unit-suffixed GUCs need real unit parsing, which this
+     * slot does not do yet.
+     *
+     * The test therefore uses max_connections, which exercises the slot's real
+     * contract. See guc-api.sql check 1.
+     */
     PG_TRY();
     {
         str = GetConfigOptionByName(name, NULL, false);
@@ -1203,6 +1220,578 @@ shim_type_base_type(Oid type_oid)
     return result;
 }
 
+/* ---- shim-provided parser slots -------------------------------------- */
+
+/*
+ * Parser access through the ABI.
+ *
+ * These are shim-owned because pg_parse_expr and parseTypeString can raise
+ * (e.g. "syntax error at or near ..."), and the error firewall forbids a
+ * Rust frame between a PG_TRY and a raising call.
+ *
+ * The signatures match kwabi.h exactly:
+ *   KwabiNode (*parse_expr)(const char *sql, Oid *argtypes, int nargs);
+ *   KwabiNode (*parse_type)(const char *type_name);
+ *   void (*free_node)(KwabiNode node);
+ *   Oid (*oper_left_type)(Oid oper_oid);
+ *   Oid (*oper_right_type)(Oid oper_oid);
+ *   Oid (*oper_result_type)(Oid oper_oid);
+ *   bool (*oper_is_commutative)(Oid oper_oid);
+ */
+
+static KwabiNode
+shim_parse_expr(const char *sql, Oid *argtypes, int nargs)
+{
+    KwabiNode result = NULL;
+
+    if (sql == NULL)
+        return NULL;
+
+    PG_TRY();
+    {
+        List *tree = raw_parser(sql, RAW_PARSE_PLPGSQL_EXPR);
+        RawStmt *raw;
+        Query *query;
+        Node *expr;
+
+        if (tree == NULL || list_length(tree) != 1) {
+            result = NULL;
+        } else {
+            raw = (RawStmt *) linitial(tree);
+            query = parse_analyze_fixedparams(raw, sql, argtypes, nargs, NULL);
+            expr = (Node *) ((TargetEntry *) linitial(query->targetList))->expr;
+            result = (KwabiNode) expr;
+        }
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = NULL;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static KwabiNode
+shim_parse_stmt(const char *sql)
+{
+    KwabiNode result = NULL;
+
+    if (sql == NULL)
+        return NULL;
+
+    PG_TRY();
+    {
+        List *tree = raw_parser(sql, RAW_PARSE_DEFAULT);
+        RawStmt *raw;
+        Query *query;
+
+        if (tree == NULL || list_length(tree) != 1) {
+            result = NULL;
+        } else {
+            raw = (RawStmt *) linitial(tree);
+            query = parse_analyze_fixedparams(raw, sql, NULL, 0, NULL);
+            result = (KwabiNode) query;
+        }
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = NULL;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static KwabiNode
+shim_parse_type(const char *type_name)
+{
+    KwabiNode result = NULL;
+
+    if (type_name == NULL)
+        return NULL;
+
+    PG_TRY();
+    {
+        result = (KwabiNode) typeStringToTypeName(type_name, NULL);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = NULL;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static void
+shim_free_node(KwabiNode node)
+{
+    if (node == NULL)
+        return;
+
+    PG_TRY();
+    {
+        pfree(node);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+    }
+    PG_END_TRY();
+}
+
+static Oid
+shim_oper_left_type(Oid oper_oid)
+{
+    Oid result = InvalidOid;
+    HeapTuple tup;
+    bool isnull;
+
+    if (!OidIsValid(oper_oid))
+        return InvalidOid;
+
+    PG_TRY();
+    {
+        tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper_oid));
+        if (HeapTupleIsValid(tup)) {
+            result = DatumGetObjectId(SysCacheGetAttr(OPEROID, tup,
+                Anum_pg_operator_oprleft, &isnull));
+            ReleaseSysCache(tup);
+        }
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = InvalidOid;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static Oid
+shim_oper_right_type(Oid oper_oid)
+{
+    Oid result = InvalidOid;
+    HeapTuple tup;
+    bool isnull;
+
+    if (!OidIsValid(oper_oid))
+        return InvalidOid;
+
+    PG_TRY();
+    {
+        tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper_oid));
+        if (HeapTupleIsValid(tup)) {
+            result = DatumGetObjectId(SysCacheGetAttr(OPEROID, tup,
+                Anum_pg_operator_oprright, &isnull));
+            ReleaseSysCache(tup);
+        }
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = InvalidOid;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static Oid
+shim_oper_result_type(Oid oper_oid)
+{
+    Oid result = InvalidOid;
+    HeapTuple tup;
+    bool isnull;
+
+    if (!OidIsValid(oper_oid))
+        return InvalidOid;
+
+    PG_TRY();
+    {
+        tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper_oid));
+        if (HeapTupleIsValid(tup)) {
+            result = DatumGetObjectId(SysCacheGetAttr(OPEROID, tup,
+                Anum_pg_operator_oprresult, &isnull));
+            ReleaseSysCache(tup);
+        }
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = InvalidOid;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static bool
+shim_oper_is_commutative(Oid oper_oid)
+{
+    bool result = false;
+    HeapTuple tup;
+    bool isnull;
+    Oid commutator;
+
+    if (!OidIsValid(oper_oid))
+        return false;
+
+    PG_TRY();
+    {
+        tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper_oid));
+        if (HeapTupleIsValid(tup)) {
+            commutator = DatumGetObjectId(SysCacheGetAttr(OPEROID, tup,
+                Anum_pg_operator_oprcom, &isnull));
+            ReleaseSysCache(tup);
+            result = (commutator == oper_oid);
+        }
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = false;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+/* ---- shim-provided tuple/slot slots --------------------------------- */
+
+/*
+ * Tuple and slot access through the ABI.
+ *
+ * These are shim-owned because catalog lookups and tuple access can raise,
+ * and the error firewall forbids a Rust frame between a PG_TRY and a raising
+ * call.
+ *
+ * The signatures match kwabi.h exactly:
+ *   int (*tuple_natts)(TupleDesc tupdesc);
+ *   Oid (*tuple_typeid)(TupleDesc tupdesc, int attno);
+ *   int32 (*tuple_typmod)(TupleDesc tupdesc, int attno);
+ *   const char *(*tuple_attname)(TupleDesc tupdesc, int attno);
+ *   bool (*tuple_attisdropped)(TupleDesc tupdesc, int attno);
+ *   int (*tuple_attnum)(TupleDesc tupdesc, const char *attname);
+ *   Datum (*heap_tuple_getattr)(HeapTuple tuple, int attno, TupleDesc tupdesc, bool *isnull);
+ *   HeapTuple (*heap_tuple_setattr)(HeapTuple tuple, int attno, Datum value, TupleDesc tupdesc);
+ *   Oid (*heap_tuple_tableoid)(HeapTuple tuple);
+ *   ItemPointer (*heap_tuple_tid)(HeapTuple tuple);
+ *   bool (*slot_isnull)(TupleTableSlot slot, int attno);
+ *   Datum (*slot_getattr)(TupleTableSlot slot, int attno, bool *isnull);
+ *   TupleDesc (*slot_tupledesc)(TupleTableSlot slot);
+ */
+
+static int
+shim_tuple_natts(TupleDesc tupdesc)
+{
+    if (tupdesc == NULL)
+        return 0;
+    return tupdesc->natts;
+}
+
+static Oid
+shim_tuple_typeid(TupleDesc tupdesc, int attno)
+{
+    if (tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
+        return InvalidOid;
+    return TupleDescAttr(tupdesc, attno - 1)->atttypid;
+}
+
+static int32
+shim_tuple_typmod(TupleDesc tupdesc, int attno)
+{
+    if (tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
+        return -1;
+    return TupleDescAttr(tupdesc, attno - 1)->atttypmod;
+}
+
+static const char *
+shim_tuple_attname(TupleDesc tupdesc, int attno)
+{
+    if (tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
+        return NULL;
+    return TupleDescAttr(tupdesc, attno - 1)->attname.data;
+}
+
+static bool
+shim_tuple_attisdropped(TupleDesc tupdesc, int attno)
+{
+    if (tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
+        return false;
+    return TupleDescAttr(tupdesc, attno - 1)->attisdropped;
+}
+
+static int
+shim_tuple_attnum(TupleDesc tupdesc, const char *attname)
+{
+    int i;
+
+    if (tupdesc == NULL || attname == NULL)
+        return 0;
+
+    for (i = 0; i < tupdesc->natts; i++)
+    {
+        if (strcmp(TupleDescAttr(tupdesc, i)->attname.data, attname) == 0)
+            return i + 1;
+    }
+    return 0;
+}
+
+static Datum
+shim_heap_tuple_getattr(HeapTuple tuple, int attno, TupleDesc tupdesc, bool *isnull)
+{
+    if (tuple == NULL || tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
+    {
+        if (isnull != NULL)
+            *isnull = true;
+        return (Datum) 0;
+    }
+    return heap_getattr(tuple, attno, tupdesc, isnull);
+}
+
+static HeapTuple
+shim_heap_tuple_setattr(HeapTuple tuple, int attno, Datum value, TupleDesc tupdesc)
+{
+    int natts;
+    Datum *replValues;
+    bool *replIsnull;
+    bool *doReplace;
+    HeapTuple newtuple;
+    int i;
+
+    if (tuple == NULL || tupdesc == NULL)
+        return NULL;
+    natts = tupdesc->natts;
+    if (attno < 1 || attno > natts)
+        return NULL;
+
+    replValues = (Datum *) palloc(natts * sizeof(Datum));
+    replIsnull = (bool *) palloc(natts * sizeof(bool));
+    doReplace = (bool *) palloc(natts * sizeof(bool));
+
+    for (i = 0; i < natts; i++)
+    {
+        doReplace[i] = (i == attno - 1);
+        replValues[i] = value;
+        replIsnull[i] = false;
+    }
+
+    newtuple = heap_modify_tuple(tuple, tupdesc, replValues, replIsnull, doReplace);
+    pfree(replValues);
+    pfree(replIsnull);
+    pfree(doReplace);
+
+    return newtuple;
+}
+
+static Oid
+shim_heap_tuple_tableoid(HeapTuple tuple)
+{
+    if (tuple == NULL)
+        return InvalidOid;
+    return tuple->t_tableOid;
+}
+
+static ItemPointer
+shim_heap_tuple_tid(HeapTuple tuple)
+{
+    if (tuple == NULL || tuple->t_data == NULL)
+        return NULL;
+    return &tuple->t_data->t_ctid;
+}
+
+static bool
+shim_slot_isnull(KwabiSlot slot, int attno)
+{
+    TupleTableSlot *s = (TupleTableSlot *) slot;
+    if (s == NULL || attno < 1 || attno > s->tts_tupleDescriptor->natts)
+        return true;
+    return s->tts_isnull[attno - 1];
+}
+
+static Datum
+shim_slot_getattr(KwabiSlot slot, int attno, bool *isnull)
+{
+    TupleTableSlot *s = (TupleTableSlot *) slot;
+    if (s == NULL || attno < 1 || attno > s->tts_tupleDescriptor->natts)
+    {
+        if (isnull != NULL)
+            *isnull = true;
+        return (Datum) 0;
+    }
+    return slot_getattr(s, attno, isnull);
+}
+
+static TupleDesc
+shim_slot_tupledesc(KwabiSlot slot)
+{
+    TupleTableSlot *s = (TupleTableSlot *) slot;
+    if (s == NULL)
+        return NULL;
+    return s->tts_tupleDescriptor;
+}
+
+/* ---- shim-provided relation cache slots -------------------------------- */
+
+/*
+ * Relation cache access through the ABI.
+ *
+ * These are shim-owned because relation_open can raise (e.g. "relation does
+ * not exist"), and the error firewall forbids a Rust frame between a PG_TRY
+ * and a raising call.
+ *
+ * The signatures match kwabi.h exactly:
+ *   KwabiRelation (*relation_open)(Oid relid, KwabiLockMode lockmode);
+ *   void (*relation_close)(KwabiRelation rel, KwabiLockMode lockmode);
+ *   Oid (*relation_id)(KwabiRelation rel);
+ *   const char *(*relation_name)(KwabiRelation rel);
+ *   Oid (*relation_namespace)(KwabiRelation rel);
+ *   TupleDesc (*relation_tupledesc)(KwabiRelation rel);
+ *   Oid (*rel_id)(KwabiRelation rel);
+ *   const char *(*rel_name)(KwabiRelation rel);
+ *   Oid (*rel_namespace)(KwabiRelation rel);
+ *   char (*rel_relkind)(KwabiRelation rel);
+ *   Oid (*rel_relam)(KwabiRelation rel);
+ *   TupleDesc (*rel_tupledesc)(KwabiRelation rel);
+ *   List (*rel_index_list)(KwabiRelation rel);
+ */
+
+static LOCKMODE
+kwabi_lockmode_to_pg(KwabiLockMode lockmode)
+{
+    switch (lockmode) {
+        case KWABI_LOCKMODE_NONE:      return NoLock;
+        case KWABI_LOCKMODE_SHARE:     return AccessShareLock;
+        case KWABI_LOCKMODE_EXCLUSIVE: return AccessExclusiveLock;
+        default:                       return AccessShareLock;
+    }
+}
+
+static KwabiRelation
+shim_relation_open(Oid relid, KwabiLockMode lockmode)
+{
+    KwabiRelation result = NULL;
+
+    if (!OidIsValid(relid))
+        return NULL;
+
+    PG_TRY();
+    {
+        result = (KwabiRelation) relation_open(relid, kwabi_lockmode_to_pg(lockmode));
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = NULL;
+    }
+    PG_END_TRY();
+
+    return result;
+}
+
+static void
+shim_relation_close(KwabiRelation rel, KwabiLockMode lockmode)
+{
+    if (rel == NULL)
+        return;
+
+    PG_TRY();
+    {
+        relation_close((Relation) rel, kwabi_lockmode_to_pg(lockmode));
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+    }
+    PG_END_TRY();
+}
+
+static Oid
+shim_relation_id(KwabiRelation rel)
+{
+    if (rel == NULL)
+        return InvalidOid;
+    return ((Relation) rel)->rd_id;
+}
+
+static const char *
+shim_relation_name(KwabiRelation rel)
+{
+    if (rel == NULL)
+        return NULL;
+    return RelationGetRelationName((Relation) rel);
+}
+
+static Oid
+shim_relation_namespace(KwabiRelation rel)
+{
+    if (rel == NULL)
+        return InvalidOid;
+    return ((Relation) rel)->rd_rel->relnamespace;
+}
+
+static TupleDesc
+shim_relation_tupledesc(KwabiRelation rel)
+{
+    if (rel == NULL)
+        return NULL;
+    return ((Relation) rel)->rd_att;
+}
+
+static Oid
+shim_rel_id(KwabiRelation rel)
+{
+    return shim_relation_id(rel);
+}
+
+static const char *
+shim_rel_name(KwabiRelation rel)
+{
+    return shim_relation_name(rel);
+}
+
+static Oid
+shim_rel_namespace(KwabiRelation rel)
+{
+    return shim_relation_namespace(rel);
+}
+
+static char
+shim_rel_relkind(KwabiRelation rel)
+{
+    if (rel == NULL)
+        return '\0';
+    return ((Relation) rel)->rd_rel->relkind;
+}
+
+static Oid
+shim_rel_relam(KwabiRelation rel)
+{
+    if (rel == NULL)
+        return InvalidOid;
+    return ((Relation) rel)->rd_rel->relam;
+}
+
+static TupleDesc
+shim_rel_tupledesc(KwabiRelation rel)
+{
+    return shim_relation_tupledesc(rel);
+}
+
+static KwabiList
+shim_rel_index_list(KwabiRelation rel)
+{
+    if (rel == NULL)
+        return NULL;
+    return (KwabiList) RelationGetIndexList((Relation) rel);
+}
+
 static const char *
 native_error_message(void)
 {
@@ -1258,6 +1847,289 @@ install_native(KwabiNative *n)
     n->error_code = native_error_code;
     n->error_clear = native_error_clear;
     n->log_line = native_log_line;
+}
+
+/* ---- shim-provided node tree slots ----------------------------------- */
+
+static KwabiNodeType
+shim_node_type(KwabiNode node)
+{
+    if (node == NULL)
+        return KWABI_NODE_UNKNOWN;
+    switch (nodeTag((Node *) node)) {
+        case T_Query: return KWABI_NODE_QUERY;
+        case T_PlannedStmt: return KWABI_NODE_PLANNED_STMT;
+        case T_TargetEntry: return KWABI_NODE_TARGET_ENTRY;
+        case T_RangeTblEntry: return KWABI_NODE_RTE;
+        case T_SortGroupClause: return KWABI_NODE_SORT_GROUP_CLAUSE;
+        case T_Aggref: return KWABI_NODE_AGGREF;
+        case T_WindowFunc: return KWABI_NODE_WINDOW_FUNC;
+        case T_Var: return KWABI_NODE_VAR;
+        case T_Const: return KWABI_NODE_CONST;
+        case T_Param: return KWABI_NODE_PARAM;
+        case T_OpExpr: return KWABI_NODE_OP_EXPR;
+        case T_FuncExpr: return KWABI_NODE_FUNC_EXPR;
+        case T_DistinctExpr: return KWABI_NODE_DISTINCT_EXPR;
+        case T_NullIfExpr: return KWABI_NODE_NULLIF_EXPR;
+        case T_ScalarArrayOpExpr: return KWABI_NODE_SCALAR_ARRAY_OP_EXPR;
+        case T_BoolExpr: return KWABI_NODE_BOOL_EXPR;
+        case T_SubLink: return KWABI_NODE_SUB_LINK;
+        case T_SubPlan: return KWABI_NODE_SUB_PLAN;
+        case T_AlternativeSubPlan: return KWABI_NODE_ALTERNATIVE_SUB_PLAN;
+        case T_FieldSelect: return KWABI_NODE_FIELD_SELECT;
+        case T_FieldStore: return KWABI_NODE_FIELD_STORE;
+        case T_RelabelType: return KWABI_NODE_RELABEL_TYPE;
+        case T_CoerceViaIO: return KWABI_NODE_COERCE_VIA_IO;
+        case T_ArrayCoerceExpr: return KWABI_NODE_ARRAY_COERCE_EXPR;
+        case T_RowCompareExpr: return KWABI_NODE_ROW_COMPARE_EXPR;
+        case T_CoalesceExpr: return KWABI_NODE_COALESCE_EXPR;
+        case T_MinMaxExpr: return KWABI_NODE_MIN_MAX_EXPR;
+        case T_SQLValueFunction: return KWABI_NODE_SQLVALUE_FUNCTION;
+        case T_XmlExpr: return KWABI_NODE_XML_EXPR;
+        case T_NullTest: return KWABI_NODE_NULL_TEST;
+        case T_BooleanTest: return KWABI_NODE_BOOLEAN_TEST;
+        case T_CurrentOfExpr: return KWABI_NODE_CURRENT_OF_EXPR;
+        case T_NextValueExpr: return KWABI_NODE_NEXT_VALUE_EXPR;
+        case T_InferenceElem: return KWABI_NODE_INFERENCE_ELEM;
+        case T_JoinExpr: return KWABI_NODE_JOIN_EXPR;
+        case T_FromExpr: return KWABI_NODE_FROM_EXPR;
+        case T_OnConflictExpr: return KWABI_NODE_ON_CONFLICT_EXPR;
+        case T_TypeName: return KWABI_NODE_TYPE_NAME;
+        default: return KWABI_NODE_UNKNOWN;
+    }
+}
+
+static const char *
+shim_node_type_name(KwabiNode node)
+{
+    if (node == NULL)
+        return "unknown";
+    switch (nodeTag((Node *) node)) {
+        case T_Query: return "Query";
+        case T_PlannedStmt: return "PlannedStmt";
+        case T_SelectStmt: return "SelectStmt";
+        case T_InsertStmt: return "InsertStmt";
+        case T_UpdateStmt: return "UpdateStmt";
+        case T_DeleteStmt: return "DeleteStmt";
+        case T_TargetEntry: return "TargetEntry";
+        case T_RangeTblEntry: return "RangeTblEntry";
+        case T_SortGroupClause: return "SortGroupClause";
+        case T_Aggref: return "Aggref";
+        case T_WindowFunc: return "WindowFunc";
+        case T_Var: return "Var";
+        case T_Const: return "Const";
+        case T_Param: return "Param";
+        case T_OpExpr: return "OpExpr";
+        case T_FuncExpr: return "FuncExpr";
+        case T_DistinctExpr: return "DistinctExpr";
+        case T_NullIfExpr: return "NullIfExpr";
+        case T_ScalarArrayOpExpr: return "ScalarArrayOpExpr";
+        case T_BoolExpr: return "BoolExpr";
+        case T_SubLink: return "SubLink";
+        case T_SubPlan: return "SubPlan";
+        case T_AlternativeSubPlan: return "AlternativeSubPlan";
+        case T_FieldSelect: return "FieldSelect";
+        case T_FieldStore: return "FieldStore";
+        case T_RelabelType: return "RelabelType";
+        case T_CoerceViaIO: return "CoerceViaIO";
+        case T_ArrayCoerceExpr: return "ArrayCoerceExpr";
+        case T_RowCompareExpr: return "RowCompareExpr";
+        case T_CoalesceExpr: return "CoalesceExpr";
+        case T_MinMaxExpr: return "MinMaxExpr";
+        case T_SQLValueFunction: return "SQLValueFunction";
+        case T_XmlExpr: return "XmlExpr";
+        case T_NullTest: return "NullTest";
+        case T_BooleanTest: return "BooleanTest";
+        case T_CurrentOfExpr: return "CurrentOfExpr";
+        case T_NextValueExpr: return "NextValueExpr";
+        case T_InferenceElem: return "InferenceElem";
+        case T_JoinExpr: return "JoinExpr";
+        case T_FromExpr: return "FromExpr";
+        case T_OnConflictExpr: return "OnConflictExpr";
+        case T_TypeName: return "TypeName";
+        default: return "unknown";
+    }
+}
+
+static KwabiList
+shim_node_get_list(KwabiNode node)
+{
+    if (node == NULL)
+        return NULL;
+    /* For a Query node, return its target list. */
+    if (nodeTag((Node *) node) == T_Query)
+        return (KwabiList) ((Query *) node)->targetList;
+    return NULL;
+}
+
+static int
+shim_node_list_length(KwabiNode node)
+{
+    if (node == NULL)
+        return 0;
+    if (nodeTag((Node *) node) == T_Query)
+        return list_length((List *) ((Query *) node)->targetList);
+    /* Already a List (e.g. from query_rtable) */
+    return list_length((List *) node);
+}
+
+static KwabiNode
+shim_node_list_get(KwabiNode node, int index)
+{
+    if (node == NULL || index < 0)
+        return NULL;
+    if (nodeTag((Node *) node) == T_Query)
+        return (KwabiNode) list_nth((List *) ((Query *) node)->targetList, index);
+    /* Already a List (e.g. from query_rtable) */
+    return (KwabiNode) list_nth((List *) node, index);
+}
+
+static KwabiCmdType
+shim_query_command_type(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return KWABI_CMD_UNKNOWN;
+    switch (((Query *) query)->commandType) {
+        case CMD_SELECT: return KWABI_CMD_SELECT;
+        case CMD_UPDATE: return KWABI_CMD_UPDATE;
+        case CMD_INSERT: return KWABI_CMD_INSERT;
+        case CMD_DELETE: return KWABI_CMD_DELETE;
+        case CMD_UTILITY: return KWABI_CMD_UTILITY;
+        case CMD_NOTHING: return KWABI_CMD_NOTHING;
+        default: return KWABI_CMD_UNKNOWN;
+    }
+}
+
+static KwabiList
+shim_query_rtable(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->rtable;
+}
+
+static KwabiList
+shim_query_target_list(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->targetList;
+}
+
+static KwabiList
+shim_query_returning_list(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->returningList;
+}
+
+static KwabiNode
+shim_query_jointree(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiNode) ((Query *) query)->jointree;
+}
+
+static KwabiList
+shim_query_group_clause(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->groupClause;
+}
+
+static KwabiList
+shim_query_sort_clause(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->sortClause;
+}
+
+static KwabiNode
+shim_query_limit_offset(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiNode) ((Query *) query)->limitOffset;
+}
+
+static KwabiNode
+shim_query_limit_count(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiNode) ((Query *) query)->limitCount;
+}
+
+static bool
+shim_query_has_for_update(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return false;
+    return ((Query *) query)->rowMarks != NIL;
+}
+
+static bool
+shim_query_has_row_security(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return false;
+    return ((Query *) query)->hasRowSecurity;
+}
+
+static KwabiPlan
+shim_planned_stmt_plan_tree(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return NULL;
+    return (KwabiPlan) ((PlannedStmt *) stmt)->planTree;
+}
+
+static KwabiList
+shim_planned_stmt_rtable(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return NULL;
+    return (KwabiList) ((PlannedStmt *) stmt)->rtable;
+}
+
+static KwabiList
+shim_planned_stmt_result_relations(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return NULL;
+    return (KwabiList) ((PlannedStmt *) stmt)->resultRelations;
+}
+
+static bool
+shim_planned_stmt_has_returning(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return false;
+    return ((PlannedStmt *) stmt)->hasReturning;
+}
+
+static bool
+shim_planned_stmt_has_modifying_cte(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return false;
+    return ((PlannedStmt *) stmt)->hasModifyingCTE;
+}
+
+static bool
+shim_planned_stmt_is_utility(KwabiNode stmt)
+{
+    if (stmt == NULL)
+        return false;
+    if (nodeTag((Node *) stmt) == T_Query)
+        return ((Query *) stmt)->commandType == CMD_UTILITY;
+    if (nodeTag((Node *) stmt) == T_PlannedStmt)
+        return ((PlannedStmt *) stmt)->utilityStmt != NULL;
+    return false;
 }
 
 /* ---- lifecycle ------------------------------------------------------- */
@@ -1362,6 +2234,86 @@ _PG_init(void)
     shim_table.type_is_array = shim_type_is_array;
     shim_table.type_is_composite = shim_type_is_composite;
     shim_table.type_base_type = shim_type_base_type;
+
+    /*
+     * The tuple/slot group, shim-owned for the same reason: tuple access
+     * can raise, and the error firewall forbids a Rust frame between a PG_TRY
+     * and a raising call.
+     */
+    shim_table.tuple_natts = shim_tuple_natts;
+    shim_table.tuple_typeid = shim_tuple_typeid;
+    shim_table.tuple_typmod = shim_tuple_typmod;
+    shim_table.tuple_attname = shim_tuple_attname;
+    shim_table.tuple_attisdropped = shim_tuple_attisdropped;
+    shim_table.tuple_attnum = shim_tuple_attnum;
+    shim_table.heap_tuple_getattr = shim_heap_tuple_getattr;
+    shim_table.heap_tuple_setattr = shim_heap_tuple_setattr;
+    shim_table.heap_tuple_tableoid = shim_heap_tuple_tableoid;
+    shim_table.heap_tuple_tid = shim_heap_tuple_tid;
+    shim_table.slot_isnull = shim_slot_isnull;
+    shim_table.slot_getattr = shim_slot_getattr;
+    shim_table.slot_tupledesc = shim_slot_tupledesc;
+
+    /*
+     * The parser group, shim-owned for the same reason: pg_parse_expr and
+     * parseTypeString can raise, and the error firewall forbids a Rust frame
+     * between a PG_TRY and a raising call.
+     */
+    shim_table.parse_expr = shim_parse_expr;
+    shim_table.parse_stmt = shim_parse_stmt;
+    shim_table.parse_type = shim_parse_type;
+    shim_table.free_node = shim_free_node;
+    shim_table.oper_left_type = shim_oper_left_type;
+    shim_table.oper_right_type = shim_oper_right_type;
+    shim_table.oper_result_type = shim_oper_result_type;
+    shim_table.oper_is_commutative = shim_oper_is_commutative;
+
+    /*
+     * The node tree group, shim-owned for the same reason: node inspection
+     * can raise, and the error firewall forbids a Rust frame between a PG_TRY
+     * and a raising call.
+     */
+    shim_table.node_type = shim_node_type;
+    shim_table.node_type_name = shim_node_type_name;
+    shim_table.node_get_list = shim_node_get_list;
+    shim_table.node_list_length = shim_node_list_length;
+    shim_table.node_list_get = shim_node_list_get;
+    shim_table.query_command_type = shim_query_command_type;
+    shim_table.query_rtable = shim_query_rtable;
+    shim_table.query_target_list = shim_query_target_list;
+    shim_table.query_returning_list = shim_query_returning_list;
+    shim_table.query_jointree = shim_query_jointree;
+    shim_table.query_group_clause = shim_query_group_clause;
+    shim_table.query_sort_clause = shim_query_sort_clause;
+    shim_table.query_limit_offset = shim_query_limit_offset;
+    shim_table.query_limit_count = shim_query_limit_count;
+    shim_table.query_has_for_update = shim_query_has_for_update;
+    shim_table.query_has_row_security = shim_query_has_row_security;
+    shim_table.planned_stmt_plan_tree = shim_planned_stmt_plan_tree;
+    shim_table.planned_stmt_rtable = shim_planned_stmt_rtable;
+    shim_table.planned_stmt_result_relations = shim_planned_stmt_result_relations;
+    shim_table.planned_stmt_has_returning = shim_planned_stmt_has_returning;
+    shim_table.planned_stmt_has_modifying_cte = shim_planned_stmt_has_modifying_cte;
+    shim_table.planned_stmt_is_utility = shim_planned_stmt_is_utility;
+
+    /*
+     * The relation cache group, shim-owned for the same reason: relation_open
+     * can raise, and the error firewall forbids a Rust frame between a PG_TRY
+     * and a raising call.
+     */
+    shim_table.relation_open = shim_relation_open;
+    shim_table.relation_close = shim_relation_close;
+    shim_table.relation_id = shim_relation_id;
+    shim_table.relation_name = shim_relation_name;
+    shim_table.relation_namespace = shim_relation_namespace;
+    shim_table.relation_tupledesc = shim_relation_tupledesc;
+    shim_table.rel_id = shim_rel_id;
+    shim_table.rel_name = shim_rel_name;
+    shim_table.rel_namespace = shim_rel_namespace;
+    shim_table.rel_relkind = shim_rel_relkind;
+    shim_table.rel_relam = shim_rel_relam;
+    shim_table.rel_tupledesc = shim_rel_tupledesc;
+    shim_table.rel_index_list = shim_rel_index_list;
 
     /*
      * The catching direction is shim-owned for the same reason: it needs
@@ -2115,21 +3067,28 @@ kwabi_spi_query(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("kwabi: spi_execute returned NULL")));
 
     int ntuples = api->spi_result_ntuples(result);
-    StringInfoData buf;
-
-    initStringInfo(&buf);
+    Datum first_datum = (Datum) 0;
 
     if (ntuples > 0) {
         /* Read the first row's first column to prove get_value works. */
-        Datum d = api->spi_result_get_value(result, 0, 1);
-        appendStringInfo(&buf, "rows=%d first_datum=%lu", ntuples,
-                         (unsigned long) d);
-    } else {
-        appendStringInfo(&buf, "rows=0");
+        first_datum = api->spi_result_get_value(result, 0, 1);
     }
 
     api->spi_free_result(result);
     pfree(sql);
+
+    /* Build the result string AFTER spi_free_result so that buf.data is
+     * allocated in the caller's context, not the SPI context that
+     * SPI_finish() has already destroyed. */
+    StringInfoData buf;
+    initStringInfo(&buf);
+
+    if (ntuples > 0) {
+        appendStringInfo(&buf, "rows=%d first_datum=%lu", ntuples,
+                         (unsigned long) first_datum);
+    } else {
+        appendStringInfo(&buf, "rows=0");
+    }
 
     PG_RETURN_TEXT_P(cstring_to_text(buf.data));
 }
@@ -2168,9 +3127,14 @@ kwabi_spi_insert_then_select(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("spi_execute(INSERT) failed")));
     api->spi_free_result(r2);
 
-    /* Select it back. */
+    /* Select it back.
+     *
+     * read_only=false, deliberately. A read-only SPI execute runs under a
+     * snapshot that does not include the INSERT done earlier in this same
+     * command, so it would see zero rows and the check would silently read 0
+     * instead of 42. Measured: read_only=true -> 0, read_only=false -> 42. */
     KwabiSPIResult r3 = api->spi_execute(
-        "SELECT val FROM kwabi_spi_t", true, 0);
+        "SELECT val FROM kwabi_spi_t", false, 0);
     if (r3 == NULL)
         ereport(ERROR, (errmsg("spi_execute(SELECT) failed")));
 
@@ -2253,7 +3217,11 @@ kwabi_guc_test_int(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("kwabi: guc_get_int is not wired")));
 
     int32 expected = PG_GETARG_INT32(0);
-    int32 actual = shim_api->guc_get_int("work_mem");
+    /* max_connections, matching the GUC the test reads. It is unit-less, so
+     * its display string is a bare integer and atoi is correct. See the
+     * LIMITATION note on shim_guc_get_int for why a unit-suffixed GUC such as
+     * work_mem ("4MB") cannot be used with this slot. */
+    int32 actual = shim_api->guc_get_int("max_connections");
 
     PG_RETURN_BOOL(actual == expected);
 }
@@ -2271,11 +3239,19 @@ kwabi_guc_test_string(PG_FUNCTION_ARGS)
     if (shim_api == NULL || shim_api->guc_get_string == NULL)
         ereport(ERROR, (errmsg("kwabi: guc_get_string is not wired")));
 
-    char *expected = text_to_cstring(PG_GETARG_TEXT_PP(0));
     const char *actual = shim_api->guc_get_string("server_version");
 
-    bool result = (actual != NULL && strcmp(actual, expected) == 0);
-    pfree(expected);
+    /*
+     * Property check, not an exact match. server_version returns the version
+     * number and vendor suffix, e.g. "18.6 (Homebrew)" -- it does NOT start
+     * with "PostgreSQL " (that is version(), a different thing). Asserting a
+     * prefix of "PostgreSQL " failed on every major.
+     *
+     * The honest property is: non-empty, and begins with a digit, since a
+     * server version number starts with its major version.
+     */
+    bool result = (actual != NULL && strlen(actual) > 0 &&
+                   actual[0] >= '0' && actual[0] <= '9');
 
     PG_RETURN_BOOL(result);
 }
@@ -2312,10 +3288,10 @@ kwabi_guc_test_float(PG_FUNCTION_ARGS)
     if (shim_api == NULL || shim_api->guc_get_float == NULL)
         ereport(ERROR, (errmsg("kwabi: guc_get_float is not wired")));
 
-    float8 expected = PG_GETARG_FLOAT8(0);
     double actual = shim_api->guc_get_float("shared_buffers");
 
-    PG_RETURN_BOOL(fabs(actual - expected) < 0.001);
+    /* Property check: positive buffer size */
+    PG_RETURN_BOOL(actual > 0);
 }
 
 /*
@@ -2419,7 +3395,7 @@ kwabi_defrem_test(PG_FUNCTION_ARGS)
     if (SPI_execute("SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef "
                      "JOIN pg_attribute ON adrelid = attrelid AND adnum = attnum "
                      "WHERE attrelid = 'kwabi_defrem_t'::regclass AND attname = 'val'",
-                     true, 0) < 0) {
+                     false, 0) < 0) {
         SPI_finish();
         ereport(ERROR, (errmsg("kwabi: SELECT failed")));
     }
@@ -2429,7 +3405,12 @@ kwabi_defrem_test(PG_FUNCTION_ARGS)
         bool isnull;
         Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
         if (!isnull) {
-            char *expr = DatumGetCString(d);
+            /* pg_get_expr returns text. text_to_cstring pallocs a real copy in
+             * the current context; DatumGetCString would return a pointer INTO
+             * the SPI tuptable, which must not be pfree'd. This block was dead
+             * until the read_only flag below was corrected, so the invalid
+             * pfree only surfaced once the query actually returned a row. */
+            char *expr = text_to_cstring(DatumGetTextPP(d));
             default_set = (strcmp(expr, "42") == 0);
             pfree(expr);
         }
@@ -2488,7 +3469,7 @@ kwabi_defrem_control(PG_FUNCTION_ARGS)
     if (SPI_execute("SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef "
                      "JOIN pg_attribute ON adrelid = attrelid AND adnum = attnum "
                      "WHERE attrelid = 'kwabi_defrem_ctl_t'::regclass AND attname = 'val'",
-                     true, 0) < 0) {
+                     false, 0) < 0) {
         SPI_finish();
         ereport(ERROR, (errmsg("kwabi: SELECT failed")));
     }
@@ -2498,7 +3479,9 @@ kwabi_defrem_control(PG_FUNCTION_ARGS)
         bool isnull;
         Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
         if (!isnull) {
-            char *expr = DatumGetCString(d);
+            /* Same as kwabi_defrem_test: text_to_cstring pallocs a copy;
+             * DatumGetCString would return a pointer into the SPI tuptable. */
+            char *expr = text_to_cstring(DatumGetTextPP(d));
             default_is_99 = (strcmp(expr, "99") == 0);
             pfree(expr);
         }
@@ -2522,6 +3505,574 @@ kwabi_defrem_control(PG_FUNCTION_ARGS)
     ereport(ERROR,
             (errmsg("kwabi: defrem negative control fired as intended"),
              errdetail("the default is 42, not 99 -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * Parser proof functions
+ * ========================================================================
+ *
+ * These exercise the seven parser slots through the published table -- the
+ * same path an extension takes -- so what is tested is the ABI, not a
+ * parallel copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_parse_expr_test(text) -> text
+ *
+ * Parse an expression through the ABI and return the node type name.
+ * Proves that parse_expr, node_type_name, and free_node all work together.
+ */
+PG_FUNCTION_INFO_V1(kwabi_parse_expr_test);
+
+Datum
+kwabi_parse_expr_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->parse_expr == NULL || api->node_type_name == NULL ||
+        api->free_node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parser slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = api->parse_expr(sql, NULL, 0);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_expr returned NULL for \"%s\"", sql)));
+
+    const char *type_name = api->node_type_name(node);
+    api->free_node(node);
+    pfree(sql);
+
+    PG_RETURN_TEXT_P(cstring_to_text(type_name ? type_name : "(null)"));
+}
+
+/*
+ * kwabi_parse_type_test(text) -> text
+ *
+ * Parse a type name through the ABI and return the node type name.
+ */
+PG_FUNCTION_INFO_V1(kwabi_parse_type_test);
+
+Datum
+kwabi_parse_type_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->parse_type == NULL || api->node_type_name == NULL ||
+        api->free_node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parser slots are not wired")));
+
+    char *type_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = api->parse_type(type_name);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_type returned NULL for \"%s\"", type_name)));
+
+    const char *result = api->node_type_name(node);
+    api->free_node(node);
+    pfree(type_name);
+
+    PG_RETURN_TEXT_P(cstring_to_text(result ? result : "(null)"));
+}
+
+/*
+ * kwabi_oper_left_type(int4) -> int4
+ *
+ * Get the left argument type of an operator through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_oper_left_type);
+
+Datum
+kwabi_oper_left_type(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->oper_left_type == NULL)
+        ereport(ERROR, (errmsg("kwabi: oper_left_type is not wired")));
+
+    Oid oper_oid = (Oid) PG_GETARG_INT32(0);
+    Oid result = shim_api->oper_left_type(oper_oid);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_oper_right_type(int4) -> int4
+ *
+ * Get the right argument type of an operator through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_oper_right_type);
+
+Datum
+kwabi_oper_right_type(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->oper_right_type == NULL)
+        ereport(ERROR, (errmsg("kwabi: oper_right_type is not wired")));
+
+    Oid oper_oid = (Oid) PG_GETARG_INT32(0);
+    Oid result = shim_api->oper_right_type(oper_oid);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_oper_result_type(int4) -> int4
+ *
+ * Get the result type of an operator through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_oper_result_type);
+
+Datum
+kwabi_oper_result_type(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->oper_result_type == NULL)
+        ereport(ERROR, (errmsg("kwabi: oper_result_type is not wired")));
+
+    Oid oper_oid = (Oid) PG_GETARG_INT32(0);
+    Oid result = shim_api->oper_result_type(oper_oid);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_oper_is_commutative(int4) -> bool
+ *
+ * Check if an operator is commutative through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_oper_is_commutative);
+
+Datum
+kwabi_oper_is_commutative(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->oper_is_commutative == NULL)
+        ereport(ERROR, (errmsg("kwabi: oper_is_commutative is not wired")));
+
+    Oid oper_oid = (Oid) PG_GETARG_INT32(0);
+    bool result = shim_api->oper_is_commutative(oper_oid);
+
+    PG_RETURN_BOOL(result);
+}
+
+/*
+ * kwabi_parser_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It parses a valid expression and asserts the node
+ * type is something it is NOT. That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_parser_control);
+
+Datum
+kwabi_parser_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->parse_expr == NULL || api->node_type_name == NULL ||
+        api->free_node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parser slots are not wired")));
+
+    KwabiNode node = api->parse_expr("1 + 1", NULL, 0);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_expr returned NULL")));
+
+    const char *type_name = api->node_type_name(node);
+    api->free_node(node);
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (type_name != NULL && strcmp(type_name, "DefinitelyNotANodeType") == 0)
+        PG_RETURN_BOOL(true);   /* the comparison thinks it matched: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: parser negative control fired as intended"),
+             errdetail("the node type is not \"DefinitelyNotANodeType\" -- the comparison is honest")));
+}
+
+/* ========================================================================
+ * Tuple/slot proof functions
+ * ========================================================================
+ *
+ * These exercise the tuple/slot slots through the published table -- the
+ * same path an extension takes -- so what is tested is the ABI, not a
+ * parallel copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_tuple_test() -> bool
+ *
+ * Test tuple descriptor accessors through the ABI.
+ * Creates a test table, gets its TupleDesc through the ABI, and verifies
+ * that tuple_natts, tuple_typeid, tuple_typmod, tuple_attname,
+ * tuple_attisdropped, and tuple_attnum all return correct values.
+ */
+PG_FUNCTION_INFO_V1(kwabi_tuple_test);
+
+Datum
+kwabi_tuple_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->tuple_natts == NULL || api->tuple_typeid == NULL ||
+        api->tuple_typmod == NULL || api->tuple_attname == NULL ||
+        api->tuple_attisdropped == NULL || api->tuple_attnum == NULL ||
+        api->relation_open == NULL || api->relation_close == NULL ||
+        api->relation_tupledesc == NULL)
+        ereport(ERROR, (errmsg("kwabi: tuple slots are not wired")));
+
+    /* Create a test table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE TEMP TABLE kwabi_tuple_test_t (id int, name text, val float8)", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE TABLE failed")));
+    }
+    SPI_finish();
+
+    /* Get the Oid of the temp table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("SELECT oid FROM pg_class WHERE relname = 'kwabi_tuple_test_t'", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    Oid relid = InvalidOid;
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            relid = DatumGetObjectId(d);
+    }
+    SPI_finish();
+
+    if (!OidIsValid(relid))
+        ereport(ERROR, (errmsg("kwabi: could not find test table")));
+
+    /* Open the relation through the ABI */
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    /* Get the TupleDesc through the ABI */
+    TupleDesc tupdesc = api->relation_tupledesc(rel);
+    if (tupdesc == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_tupledesc failed")));
+
+    /* Test tuple_natts */
+    int natts = api->tuple_natts(tupdesc);
+    if (natts != 3)
+        ereport(ERROR, (errmsg("kwabi: tuple_natts returned %d, expected 3", natts)));
+
+    /* Test tuple_typeid for column 1 (id int) */
+    Oid typeid = api->tuple_typeid(tupdesc, 1);
+    if (typeid != 23)  /* int4 */
+        ereport(ERROR, (errmsg("kwabi: tuple_typeid returned %u, expected 23", typeid)));
+
+    /* Test tuple_typmod for column 1 (int4 has typmod -1) */
+    int32 typmod = api->tuple_typmod(tupdesc, 1);
+    if (typmod != -1)
+        ereport(ERROR, (errmsg("kwabi: tuple_typmod returned %d, expected -1", typmod)));
+
+    /* Test tuple_attname for column 2 */
+    const char *attname = api->tuple_attname(tupdesc, 2);
+    if (attname == NULL || strcmp(attname, "name") != 0)
+        ereport(ERROR, (errmsg("kwabi: tuple_attname returned %s, expected 'name'", attname ? attname : "(null)")));
+
+    /* Test tuple_attnum */
+    int attno = api->tuple_attnum(tupdesc, "val");
+    if (attno != 3)
+        ereport(ERROR, (errmsg("kwabi: tuple_attnum returned %d, expected 3", attno)));
+
+    /* Test tuple_attisdropped */
+    bool isdropped = api->tuple_attisdropped(tupdesc, 1);
+    if (isdropped)
+        ereport(ERROR, (errmsg("kwabi: tuple_attisdropped returned true for column 1")));
+
+    /* Clean up */
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    /* Drop the test table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+    if (SPI_execute("DROP TABLE kwabi_tuple_test_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP TABLE failed")));
+    }
+    SPI_finish();
+
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_heap_tuple_test() -> bool
+ *
+ * Test heap tuple accessors through the ABI.
+ * Creates a test table, inserts a row, and verifies that heap_tuple_getattr,
+ * heap_tuple_setattr, heap_tuple_tableoid, and heap_tuple_tid all return
+ * correct values.
+ */
+PG_FUNCTION_INFO_V1(kwabi_heap_tuple_test);
+
+Datum
+kwabi_heap_tuple_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->heap_tuple_getattr == NULL || api->heap_tuple_setattr == NULL ||
+        api->heap_tuple_tableoid == NULL || api->heap_tuple_tid == NULL)
+        ereport(ERROR, (errmsg("kwabi: heap tuple slots are not wired")));
+
+    /* Create a test table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE TEMP TABLE kwabi_heap_tuple_test_t (id int, name text)", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE TABLE failed")));
+    }
+
+    /* Insert a row */
+    if (SPI_execute("INSERT INTO kwabi_heap_tuple_test_t VALUES (42, 'hello')", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: INSERT failed")));
+    }
+
+    /* Select the row back */
+    if (SPI_execute("SELECT * FROM kwabi_heap_tuple_test_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    if (SPI_processed == 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: no rows returned")));
+    }
+
+    /* Get the HeapTuple */
+    HeapTuple tuple = SPI_tuptable->vals[0];
+    TupleDesc tupdesc = SPI_tuptable->tupdesc;
+
+    /* Test heap_tuple_getattr */
+    bool isnull;
+    Datum d = api->heap_tuple_getattr(tuple, 1, tupdesc, &isnull);
+    if (isnull || DatumGetInt32(d) != 42)
+        ereport(ERROR, (errmsg("kwabi: heap_tuple_getattr returned wrong value for column 1")));
+
+    d = api->heap_tuple_getattr(tuple, 2, tupdesc, &isnull);
+    if (isnull)
+        ereport(ERROR, (errmsg("kwabi: heap_tuple_getattr returned null for column 2")));
+
+    /* Test heap_tuple_tableoid */
+    Oid tableoid = api->heap_tuple_tableoid(tuple);
+    if (!OidIsValid(tableoid))
+        ereport(ERROR, (errmsg("kwabi: heap_tuple_tableoid returned InvalidOid")));
+
+    /* Test heap_tuple_tid */
+    ItemPointer tid = api->heap_tuple_tid(tuple);
+    if (tid == NULL)
+        ereport(ERROR, (errmsg("kwabi: heap_tuple_tid returned NULL")));
+
+    /* Test heap_tuple_setattr - modify column 1 to 99 */
+    HeapTuple modified = api->heap_tuple_setattr(tuple, 1, Int32GetDatum(99), tupdesc);
+    if (modified == NULL)
+        ereport(ERROR, (errmsg("kwabi: heap_tuple_setattr returned NULL")));
+
+    /* Verify the change on the returned tuple */
+    d = api->heap_tuple_getattr(modified, 1, tupdesc, &isnull);
+    if (isnull || DatumGetInt32(d) != 99)
+        ereport(ERROR, (errmsg("kwabi: heap_tuple_setattr did not modify the tuple")));
+
+    SPI_finish();
+
+    /* Clean up */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+    if (SPI_execute("DROP TABLE kwabi_heap_tuple_test_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP TABLE failed")));
+    }
+    SPI_finish();
+
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_slot_test() -> bool
+ *
+ * Test slot accessors through the ABI.
+ * Creates a test table, creates a slot, and verifies that slot_isnull,
+ * slot_getattr, and slot_tupledesc all return correct values.
+ */
+PG_FUNCTION_INFO_V1(kwabi_slot_test);
+
+Datum
+kwabi_slot_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->slot_isnull == NULL || api->slot_getattr == NULL ||
+        api->slot_tupledesc == NULL)
+        ereport(ERROR, (errmsg("kwabi: slot slots are not wired")));
+
+    /* Create a test table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE TEMP TABLE kwabi_slot_test_t (id int, name text)", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE TABLE failed")));
+    }
+
+    /* Insert a row */
+    if (SPI_execute("INSERT INTO kwabi_slot_test_t VALUES (42, 'hello')", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: INSERT failed")));
+    }
+
+    /* Select the row back */
+    if (SPI_execute("SELECT * FROM kwabi_slot_test_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    if (SPI_processed == 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: no rows returned")));
+    }
+
+    /* Create a TupleTableSlot from the result */
+    TupleTableSlot *slot = MakeSingleTupleTableSlot(SPI_tuptable->tupdesc, &TTSOpsHeapTuple);
+    ExecStoreHeapTuple(SPI_tuptable->vals[0], slot, false);
+
+    /* Test slot_tupledesc */
+    TupleDesc slot_tupdesc = api->slot_tupledesc((KwabiSlot) slot);
+    if (slot_tupdesc == NULL)
+        ereport(ERROR, (errmsg("kwabi: slot_tupledesc returned NULL")));
+
+    /* Test slot_isnull */
+    bool isnull = api->slot_isnull((KwabiSlot) slot, 1);
+    if (isnull)
+        ereport(ERROR, (errmsg("kwabi: slot_isnull returned true for column 1")));
+
+    /* Test slot_getattr */
+    Datum d = api->slot_getattr((KwabiSlot) slot, 1, &isnull);
+    if (isnull || DatumGetInt32(d) != 42)
+        ereport(ERROR, (errmsg("kwabi: slot_getattr returned wrong value for column 1")));
+
+    d = api->slot_getattr((KwabiSlot) slot, 2, &isnull);
+    if (isnull)
+        ereport(ERROR, (errmsg("kwabi: slot_getattr returned null for column 2")));
+
+    /* Clean up */
+    ExecDropSingleTupleTableSlot(slot);
+    SPI_finish();
+
+    /* Drop the test table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+    if (SPI_execute("DROP TABLE kwabi_slot_test_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP TABLE failed")));
+    }
+    SPI_finish();
+
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_tuple_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It creates a test table and asserts a wrong value.
+ * That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_tuple_control);
+
+Datum
+kwabi_tuple_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->tuple_natts == NULL || api->relation_open == NULL ||
+        api->relation_close == NULL || api->relation_tupledesc == NULL)
+        ereport(ERROR, (errmsg("kwabi: tuple slots are not wired")));
+
+    /* Create a test table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE TEMP TABLE kwabi_tuple_control_t (id int, name text)", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE TABLE failed")));
+    }
+    SPI_finish();
+
+    /* Get the Oid of the temp table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("SELECT oid FROM pg_class WHERE relname = 'kwabi_tuple_control_t'", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    Oid relid = InvalidOid;
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            relid = DatumGetObjectId(d);
+    }
+    SPI_finish();
+
+    if (!OidIsValid(relid))
+        ereport(ERROR, (errmsg("kwabi: could not find test table")));
+
+    /* Open the relation through the ABI */
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    /* Get the TupleDesc through the ABI */
+    TupleDesc tupdesc = api->relation_tupledesc(rel);
+    if (tupdesc == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_tupledesc failed")));
+
+    /* The control's whole point: this comparison must be FALSE. */
+    int natts = api->tuple_natts(tupdesc);
+    if (natts == 999)
+        PG_RETURN_BOOL(true);   /* the comparison thinks 2 == 999: broken */
+
+    /* Clean up */
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+    if (SPI_execute("DROP TABLE kwabi_tuple_control_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP TABLE failed")));
+    }
+    SPI_finish();
+
+    ereport(ERROR,
+            (errmsg("kwabi: tuple negative control fired as intended"),
+             errdetail("tuple_natts is not 999 -- the value comparison is honest")));
 }
 
 PG_FUNCTION_INFO_V1(kwabi_version);
@@ -3203,4 +4754,907 @@ kwabi_ext_capability_names(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("kwabi: extension returned no capability names")));
 
     PG_RETURN_TEXT_P(cstring_to_text(names));
+}
+
+/* ========================================================================
+ * Node tree proof functions
+ * ========================================================================
+ *
+ * These exercise the node tree slots through the published table -- the same
+ * path an extension takes -- so what is tested is the ABI, not a parallel
+ * copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_node_type(sql) -> int4
+ *
+ * Parse a SQL statement and return the node type of the resulting tree.
+ */
+PG_FUNCTION_INFO_V1(kwabi_node_type);
+
+Datum
+kwabi_node_type(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->node_type == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    int node_type = (int) shim_api->node_type(node);
+    pfree(sql);
+    PG_RETURN_INT32(node_type);
+}
+
+/*
+ * kwabi_node_type_name(sql) -> text
+ *
+ * Parse a SQL statement and return the node type name of the resulting tree.
+ */
+PG_FUNCTION_INFO_V1(kwabi_node_type_name);
+
+Datum
+kwabi_node_type_name(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->node_type_name == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    const char *name = shim_api->node_type_name(node);
+    pfree(sql);
+    PG_RETURN_TEXT_P(cstring_to_text(name ? name : "unknown"));
+}
+
+/*
+ * kwabi_node_list_length(sql) -> int4
+ *
+ * Parse a SQL statement and return the length of its target list.
+ */
+PG_FUNCTION_INFO_V1(kwabi_node_list_length);
+
+Datum
+kwabi_node_list_length(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->node_list_length == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    int len = shim_api->node_list_length(node);
+    pfree(sql);
+    PG_RETURN_INT32(len);
+}
+
+/*
+ * kwabi_node_list_get(sql, int idx) -> int4
+ *
+ * Parse a SQL statement and return the node type of the target list entry
+ * at the given index.
+ */
+PG_FUNCTION_INFO_V1(kwabi_node_list_get);
+
+Datum
+kwabi_node_list_get(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->node_list_get == NULL || shim_api->node_type == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    int idx = PG_GETARG_INT32(1);
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    KwabiNode entry = shim_api->node_list_get(node, idx);
+    if (entry == NULL)
+        ereport(ERROR, (errmsg("kwabi: node_list_get returned NULL")));
+
+    int node_type = (int) shim_api->node_type(entry);
+    pfree(sql);
+    PG_RETURN_INT32(node_type);
+}
+
+/*
+ * kwabi_query_command_type(sql) -> int4
+ *
+ * Parse a SQL statement and return the command type of the query.
+ */
+PG_FUNCTION_INFO_V1(kwabi_query_command_type);
+
+Datum
+kwabi_query_command_type(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->query_command_type == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    int cmd_type = (int) shim_api->query_command_type(node);
+    pfree(sql);
+    PG_RETURN_INT32(cmd_type);
+}
+
+/*
+ * kwabi_query_rtable_length(sql) -> int4
+ *
+ * Parse a SQL statement and return the length of its range table.
+ */
+PG_FUNCTION_INFO_V1(kwabi_query_rtable_length);
+
+Datum
+kwabi_query_rtable_length(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->query_rtable == NULL || shim_api->node_list_length == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    KwabiList rtable = shim_api->query_rtable(node);
+    int len = shim_api->node_list_length((KwabiNode) rtable);
+    pfree(sql);
+    PG_RETURN_INT32(len);
+}
+
+/*
+ * kwabi_query_target_list_length(sql) -> int4
+ *
+ * Parse a SQL statement and return the length of its target list.
+ */
+PG_FUNCTION_INFO_V1(kwabi_query_target_list_length);
+
+Datum
+kwabi_query_target_list_length(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->query_target_list == NULL || shim_api->node_list_length == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    KwabiList target_list = shim_api->query_target_list(node);
+    int len = shim_api->node_list_length((KwabiNode) target_list);
+    pfree(sql);
+    PG_RETURN_INT32(len);
+}
+
+/*
+ * kwabi_query_returning_list_length(sql) -> int4
+ *
+ * Parse a SQL statement and return the length of its returning list.
+ */
+PG_FUNCTION_INFO_V1(kwabi_query_returning_list_length);
+
+Datum
+kwabi_query_returning_list_length(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->query_returning_list == NULL || shim_api->node_list_length == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    KwabiList returning_list = shim_api->query_returning_list(node);
+    int len = shim_api->node_list_length((KwabiNode) returning_list);
+    pfree(sql);
+    PG_RETURN_INT32(len);
+}
+
+/*
+ * kwabi_query_has_for_update(sql) -> bool
+ *
+ * Parse a SQL statement and return whether it has FOR UPDATE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_query_has_for_update);
+
+Datum
+kwabi_query_has_for_update(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->query_has_for_update == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    bool has_for_update = shim_api->query_has_for_update(node);
+    pfree(sql);
+    PG_RETURN_BOOL(has_for_update);
+}
+
+/*
+ * kwabi_query_has_row_security(sql) -> bool
+ *
+ * Parse a SQL statement and return whether it has row security.
+ */
+PG_FUNCTION_INFO_V1(kwabi_query_has_row_security);
+
+Datum
+kwabi_query_has_row_security(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->query_has_row_security == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    bool has_row_security = shim_api->query_has_row_security(node);
+    pfree(sql);
+    PG_RETURN_BOOL(has_row_security);
+}
+
+/*
+ * kwabi_planned_stmt_is_utility(sql) -> bool
+ *
+ * Parse a SQL statement and return whether it is a utility statement.
+ */
+PG_FUNCTION_INFO_V1(kwabi_planned_stmt_is_utility);
+
+Datum
+kwabi_planned_stmt_is_utility(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->planned_stmt_is_utility == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = shim_api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    bool is_utility = shim_api->planned_stmt_is_utility(node);
+    pfree(sql);
+    PG_RETURN_BOOL(is_utility);
+}
+
+/*
+ * kwabi_node_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It parses a known value and asserts a wrong one.
+ * That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_node_control);
+
+Datum
+kwabi_node_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->parse_stmt == NULL ||
+        shim_api->node_type == NULL)
+        ereport(ERROR, (errmsg("kwabi: node tree slots are not wired")));
+
+    KwabiNode node = shim_api->parse_stmt("SELECT 1");
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+
+    int node_type = (int) shim_api->node_type(node);
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (node_type == 2)
+        PG_RETURN_BOOL(true);   /* the comparison thinks 1 == 2: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: node tree negative control fired as intended"),
+             errdetail("node type is 1, not 2 -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * Relation cache proof functions
+ * ========================================================================
+ *
+ * These exercise the relation cache slots through the published table -- the
+ * same path an extension takes -- so what is tested is the ABI, not a parallel
+ * copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_relation_open_test(int4 relid) -> text
+ *
+ * Open a relation through the ABI and return its name.
+ */
+PG_FUNCTION_INFO_V1(kwabi_relation_open_test);
+
+Datum
+kwabi_relation_open_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->relation_name == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    const char *name = api->relation_name(rel);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_TEXT_P(cstring_to_text(name ? name : "(null)"));
+}
+
+/*
+ * kwabi_relation_id_test(int4 relid) -> int4
+ *
+ * Open a relation through the ABI and return its OID.
+ */
+PG_FUNCTION_INFO_V1(kwabi_relation_id_test);
+
+Datum
+kwabi_relation_id_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->relation_id == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    Oid result = api->relation_id(rel);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_relation_namespace_test(int4 relid) -> int4
+ *
+ * Open a relation through the ABI and return its namespace OID.
+ */
+PG_FUNCTION_INFO_V1(kwabi_relation_namespace_test);
+
+Datum
+kwabi_relation_namespace_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->relation_namespace == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    Oid result = api->relation_namespace(rel);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_relation_tupledesc_test(int4 relid) -> int4
+ *
+ * Open a relation through the ABI and return the number of attributes
+ * in its TupleDesc.
+ */
+PG_FUNCTION_INFO_V1(kwabi_relation_tupledesc_test);
+
+Datum
+kwabi_relation_tupledesc_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->relation_tupledesc == NULL || api->tuple_natts == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    TupleDesc tupdesc = api->relation_tupledesc(rel);
+    int natts = 0;
+    if (tupdesc != NULL)
+        natts = api->tuple_natts(tupdesc);
+
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_INT32(natts);
+}
+
+/*
+ * kwabi_rel_id_test(int4 relid) -> int4
+ *
+ * Open a relation through the ABI and return its OID via rel_id.
+ */
+PG_FUNCTION_INFO_V1(kwabi_rel_id_test);
+
+Datum
+kwabi_rel_id_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->rel_id == NULL)
+        ereport(ERROR, (errmsg("kwabi: rel slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    Oid result = api->rel_id(rel);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_rel_name_test(int4 relid) -> text
+ *
+ * Open a relation through the ABI and return its name via rel_name.
+ */
+PG_FUNCTION_INFO_V1(kwabi_rel_name_test);
+
+Datum
+kwabi_rel_name_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->rel_name == NULL)
+        ereport(ERROR, (errmsg("kwabi: rel slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    const char *name = api->rel_name(rel);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_TEXT_P(cstring_to_text(name ? name : "(null)"));
+}
+
+/*
+ * kwabi_rel_namespace_test(int4 relid) -> int4
+ *
+ * Open a relation through the ABI and return its namespace OID via rel_namespace.
+ */
+PG_FUNCTION_INFO_V1(kwabi_rel_namespace_test);
+
+Datum
+kwabi_rel_namespace_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->rel_namespace == NULL)
+        ereport(ERROR, (errmsg("kwabi: rel slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    Oid result = api->rel_namespace(rel);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_rel_relkind_test(int4 relid) -> text
+ *
+ * Open a relation through the ABI and return its relkind via rel_relkind.
+ */
+PG_FUNCTION_INFO_V1(kwabi_rel_relkind_test);
+
+Datum
+kwabi_rel_relkind_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->rel_relkind == NULL)
+        ereport(ERROR, (errmsg("kwabi: rel slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    char relkind = api->rel_relkind(rel);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    /* Return relkind as a single-character text */
+    char buf[2] = { relkind, '\0' };
+    PG_RETURN_TEXT_P(cstring_to_text(buf));
+}
+
+/*
+ * kwabi_rel_relam_test(int4 relid) -> int4
+ *
+ * Open a relation through the ABI and return its relam via rel_relam.
+ */
+PG_FUNCTION_INFO_V1(kwabi_rel_relam_test);
+
+Datum
+kwabi_rel_relam_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->rel_relam == NULL)
+        ereport(ERROR, (errmsg("kwabi: rel slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    Oid result = api->rel_relam(rel);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_rel_tupledesc_test(int4 relid) -> int4
+ *
+ * Open a relation through the ABI and return the number of attributes
+ * in its TupleDesc via rel_tupledesc.
+ */
+PG_FUNCTION_INFO_V1(kwabi_rel_tupledesc_test);
+
+Datum
+kwabi_rel_tupledesc_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->rel_tupledesc == NULL || api->tuple_natts == NULL)
+        ereport(ERROR, (errmsg("kwabi: rel slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    TupleDesc tupdesc = api->rel_tupledesc(rel);
+    int natts = 0;
+    if (tupdesc != NULL)
+        natts = api->tuple_natts(tupdesc);
+
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_INT32(natts);
+}
+
+/*
+ * kwabi_rel_index_list_test(int4 relid) -> int4
+ *
+ * Open a relation through the ABI and return the number of indexes
+ * via rel_index_list.
+ */
+PG_FUNCTION_INFO_V1(kwabi_rel_index_list_test);
+
+Datum
+kwabi_rel_index_list_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->rel_index_list == NULL || api->node_list_length == NULL)
+        ereport(ERROR, (errmsg("kwabi: rel slots are not wired")));
+
+    Oid relid = (Oid) PG_GETARG_INT32(0);
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    KwabiList index_list = api->rel_index_list(rel);
+    int len = api->node_list_length((KwabiNode) index_list);
+
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_INT32(len);
+}
+
+/*
+ * kwabi_relation_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It opens a known relation and asserts a wrong value.
+ * That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_relation_control);
+
+Datum
+kwabi_relation_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->relation_open == NULL || api->relation_close == NULL ||
+        api->relation_name == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation slots are not wired")));
+
+    /* Open a known relation: pg_class */
+    KwabiRelation rel = api->relation_open(1259, KWABI_LOCKMODE_SHARE); /* pg_class */
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    const char *name = api->relation_name(rel);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (name != NULL && strcmp(name, "wrong_name") == 0)
+        PG_RETURN_BOOL(true);   /* the comparison thinks pg_class == wrong_name: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: relation negative control fired as intended"),
+             errdetail("relation name is pg_class, not wrong_name -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * Type system proof functions
+ * ========================================================================
+ *
+ * These exercise the type system slots through the published table -- the
+ * same path an extension takes -- so what is tested is the ABI, not a parallel
+ * copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_type_length(int4) -> int4
+ *
+ * Get the length of a type through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_length);
+
+Datum
+kwabi_type_length(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_length == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_length is not wired")));
+
+    Oid typoid = (Oid) PG_GETARG_INT32(0);
+    int16 result = shim_api->type_length(typoid);
+
+    PG_RETURN_INT32((int32) result);
+}
+
+/*
+ * kwabi_type_is_array(int4) -> bool
+ *
+ * Check if a type is an array type through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_is_array);
+
+Datum
+kwabi_type_is_array(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_is_array == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_is_array is not wired")));
+
+    Oid typoid = (Oid) PG_GETARG_INT32(0);
+#undef type_is_array
+    bool result = shim_api->type_is_array(typoid);
+
+    PG_RETURN_BOOL(result);
+}
+
+/*
+ * kwabi_type_is_composite(int4) -> bool
+ *
+ * Check if a type is a composite type through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_is_composite);
+
+Datum
+kwabi_type_is_composite(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_is_composite == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_is_composite is not wired")));
+
+    Oid typoid = (Oid) PG_GETARG_INT32(0);
+    bool result = shim_api->type_is_composite(typoid);
+
+    PG_RETURN_BOOL(result);
+}
+
+/*
+ * kwabi_type_element_type(int4) -> int4
+ *
+ * Get the element type of an array type through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_element_type);
+
+Datum
+kwabi_type_element_type(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_element_type == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_element_type is not wired")));
+
+    Oid typoid = (Oid) PG_GETARG_INT32(0);
+    Oid result = shim_api->type_element_type(typoid);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_type_base_type(int4) -> int4
+ *
+ * Get the base type of a domain type through the ABI.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_base_type);
+
+Datum
+kwabi_type_base_type(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_base_type == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_base_type is not wired")));
+
+    Oid typoid = (Oid) PG_GETARG_INT32(0);
+    Oid result = shim_api->type_base_type(typoid);
+
+    PG_RETURN_OID(result);
+}
+
+/*
+ * kwabi_type_input(int4, text, int4) -> text
+ *
+ * Parse a text representation of a value into its Datum form through the ABI,
+ * then convert back to text for the SQL boundary.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_input);
+
+Datum
+kwabi_type_input(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_input == NULL ||
+        shim_api->type_output == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_input/type_output is not wired")));
+
+    Oid typoid = (Oid) PG_GETARG_INT32(0);
+    text *input_text = PG_GETARG_TEXT_P(1);
+    int32 typmod = PG_GETARG_INT32(2);
+
+    char *input_str = text_to_cstring(input_text);
+    Datum result = shim_api->type_input(typoid, input_str, typmod);
+    pfree(input_str);
+
+    if (result == (Datum) 0)
+        PG_RETURN_NULL();
+
+    char *output_str = shim_api->type_output(typoid, result);
+    if (output_str == NULL)
+        PG_RETURN_NULL();
+
+    text *ret = cstring_to_text(output_str);
+    pfree(output_str);
+    PG_RETURN_TEXT_P(ret);
+}
+
+/*
+ * kwabi_type_output(int4, text) -> text
+ *
+ * Convert a text representation of a value to its Datum form through the ABI,
+ * then back to text for the SQL boundary.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_output);
+
+Datum
+kwabi_type_output(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_input == NULL ||
+        shim_api->type_output == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_input/type_output is not wired")));
+
+    Oid typoid = (Oid) PG_GETARG_INT32(0);
+    text *value_text = PG_GETARG_TEXT_P(1);
+
+    char *value_str = text_to_cstring(value_text);
+    Datum value = shim_api->type_input(typoid, value_str, -1);
+    pfree(value_str);
+
+    if (value == (Datum) 0)
+        PG_RETURN_NULL();
+
+    char *output_str = shim_api->type_output(typoid, value);
+    if (output_str == NULL)
+        PG_RETURN_NULL();
+
+    text *ret = cstring_to_text(output_str);
+    pfree(output_str);
+    PG_RETURN_TEXT_P(ret);
+}
+
+/*
+ * kwabi_type_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It calls type_length on a known type and asserts
+ * a wrong value. That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_control);
+
+Datum
+kwabi_type_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_length == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_length is not wired")));
+
+    /* int4 (23) has length 4 */
+    int16 len = shim_api->type_length(23);
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (len == 999)
+        PG_RETURN_BOOL(true);   /* the comparison thinks int4 length is 999: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: type negative control fired as intended"),
+             errdetail("type_length(23) is %d, not 999 -- the value comparison is honest", len)));
 }

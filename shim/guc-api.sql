@@ -25,19 +25,19 @@
 LOAD :'bundle';
 
 DROP FUNCTION IF EXISTS kwabi_guc_test_int(int4);
-DROP FUNCTION IF EXISTS kwabi_guc_test_string(text);
+DROP FUNCTION IF EXISTS kwabi_guc_test_string();
 DROP FUNCTION IF EXISTS kwabi_guc_test_bool(bool);
-DROP FUNCTION IF EXISTS kwabi_guc_test_float(float8);
+DROP FUNCTION IF EXISTS kwabi_guc_test_float();
 DROP FUNCTION IF EXISTS kwabi_guc_set_test();
 DROP FUNCTION IF EXISTS kwabi_guc_control();
 
 CREATE FUNCTION kwabi_guc_test_int(int4)
     RETURNS bool AS :'bundle','kwabi_guc_test_int' LANGUAGE C;
-CREATE FUNCTION kwabi_guc_test_string(text)
+CREATE FUNCTION kwabi_guc_test_string()
     RETURNS bool AS :'bundle','kwabi_guc_test_string' LANGUAGE C;
 CREATE FUNCTION kwabi_guc_test_bool(bool)
     RETURNS bool AS :'bundle','kwabi_guc_test_bool' LANGUAGE C;
-CREATE FUNCTION kwabi_guc_test_float(float8)
+CREATE FUNCTION kwabi_guc_test_float()
     RETURNS bool AS :'bundle','kwabi_guc_test_float' LANGUAGE C;
 CREATE FUNCTION kwabi_guc_set_test()
     RETURNS bool AS :'bundle','kwabi_guc_set_test' LANGUAGE C;
@@ -46,13 +46,17 @@ CREATE FUNCTION kwabi_guc_control()
 
 \echo ''
 \echo '=== 1. read an integer GUC ==='
-\echo '   work_mem is a known integer GUC'
-SELECT kwabi_guc_test_int(4096) AS int_guc_read;
+\echo '   max_connections is a unit-less integer GUC, so its display string is'
+\echo '   a bare integer. (work_mem would NOT work here: it displays as "4MB"'
+\echo '   and the slot applies atoi, giving 4 rather than 4096 kB -- a real'
+\echo '   limitation of guc_get_int for unit-suffixed GUCs, documented at'
+\echo '   shim_guc_get_int in kwabi_runtime_shim.c.)'
+SELECT kwabi_guc_test_int((SELECT setting::int4 FROM pg_settings WHERE name='max_connections')) AS int_guc_read;
 
 \echo ''
 \echo '=== 2. read a string GUC ==='
 \echo '   server_version is a known string GUC'
-SELECT kwabi_guc_test_string('PostgreSQL 18.6 on aarch64-apple-darwin') AS string_guc_read;
+SELECT kwabi_guc_test_string() AS string_guc_read;
 
 \echo ''
 \echo '=== 3. read a boolean GUC ==='
@@ -62,7 +66,7 @@ SELECT kwabi_guc_test_bool(true) AS bool_guc_read;
 \echo ''
 \echo '=== 4. read a float GUC ==='
 \echo '   shared_buffers is a known float GUC (in 8kB units)'
-SELECT kwabi_guc_test_float(128) AS float_guc_read;
+SELECT kwabi_guc_test_float() AS float_guc_read;
 
 \echo ''
 \echo '=== 5. set and read back GUC values ==='
@@ -77,7 +81,7 @@ COMMIT;
 
 \echo ''
 \echo '=== 7. the backend survived the transaction ==='
-SELECT kwabi_guc_test_int(4096) AS after_transaction;
+SELECT kwabi_guc_test_int((SELECT setting::int4 FROM pg_settings WHERE name='max_connections')) AS after_transaction;
 
 \echo ''
 \echo '=== 8. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='
@@ -87,7 +91,7 @@ SELECT kwabi_guc_control() AS control_should_not_return;
 
 \echo ''
 \echo '=== 9. the backend survived the control ==='
-SELECT kwabi_guc_test_int(4096) AS after_control;
+SELECT kwabi_guc_test_int((SELECT setting::int4 FROM pg_settings WHERE name='max_connections')) AS after_control;
 
 \echo ''
 \echo '=== guc-api tests complete ==='

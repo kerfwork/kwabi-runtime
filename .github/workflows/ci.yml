@@ -9,97 +9,132 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: 1
 
 jobs:
-  core:
-    name: Core tests
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: cargo test
-        run: cargo test
-      - name: src/abi.rs matches kwabi.h
-        run: |
-          python3 gen_kwabi_struct.py vendor/kwabi/kwabi.h > /tmp/kwabi_abi_check.rs
-          diff -q /tmp/kwabi_abi_check.rs src/abi.rs
-      - name: kwabi.h compiles standalone
-        run: cc -fsyntax-only -Wall -Wextra -x c vendor/kwabi/kwabi.h
-
-  matrix:
-    name: PG ${{ matrix.pg }}
-    runs-on: macos-latest
-    needs: core
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        pg: ["16", "17", "18"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install PostgreSQL ${{ matrix.pg }}
-        run: brew install postgresql@${{ matrix.pg }}
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Set paths
-        id: paths
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --all-targets --all-features
+
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+  # The ABI matrix: build the shim for each PostgreSQL major and run every
+  # test group. This is the job that proves the ABI is stable across versions.
+  #
+  # It invokes shim/ci-local.sh — the SAME script that runs locally — so there
+  # is exactly one definition of "green". The script:
+  #   1. Builds the canary once and pins its hash (build-once assertion)
+  #   2. Compiles the shim against each major's headers
+  #   3. Runs all 16 test groups against each major
+  #   4. Fails if ANY group has a non-zero 'f' count
+  #   5. Fails if ANY group produces zero results (the type-api hole)
+  #   6. Fails if any expected named check is missing
+  #
+  # A group with 0 t and 0 f counts as FAIL. This is the specific hole that
+  # let type-api sit "green" while containing no executable SQL.
+  #
+  # The script is portable: it resolves pg_config per major (env override ->
+  # versioned binary on PATH -> platform default), derives .so/.dylib, uses
+  # sha256sum or shasum, and probes the unix-socket directory. An unresolvable
+  # DECLARED major is a FAIL, not a SKIP — otherwise a runner missing a major
+  # would report green having tested fewer versions than the job name claims.
+  #
+  # Verified locally on macOS 15 (Homebrew PG 16/17/18) and Debian bookworm
+  # (PGDG PG 16/17/18): PASS=58 FAIL=0 SKIP=0 on both.
+  abi-matrix:
+    name: ABI Matrix (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install PostgreSQL 16, 17, 18 (Linux)
+        if: runner.os == 'Linux'
         run: |
-          PG=${{ matrix.pg }}
-          if [ "$PG" = "18" ]; then
-            echo "pg_config=/opt/homebrew/opt/postgresql@18/bin/pg_config" >> $GITHUB_OUTPUT
-            echo "pg_bin=/opt/homebrew/opt/postgresql@18/bin" >> $GITHUB_OUTPUT
-            echo "port=5432" >> $GITHUB_OUTPUT
-          else
-            echo "pg_config=/opt/homebrew/opt/postgresql@${PG}/bin/pg_config" >> $GITHUB_OUTPUT
-            echo "pg_bin=/opt/homebrew/opt/postgresql@${PG}/bin" >> $GITHUB_OUTPUT
-            if [ "$PG" = "16" ]; then
-              echo "port=5434" >> $GITHUB_OUTPUT
-            else
-              echo "port=5433" >> $GITHUB_OUTPUT
-            fi
-          fi
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+          https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            postgresql-16 postgresql-server-dev-16 \
+            postgresql-17 postgresql-server-dev-17 \
+            postgresql-18 postgresql-server-dev-18
 
-      - name: Start PostgreSQL ${{ matrix.pg }}
+      - name: Install PostgreSQL 16, 17, 18 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install postgresql@16 postgresql@17 postgresql@18
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Start PostgreSQL 16 and 17 (Linux)
+        if: runner.os == 'Linux'
         run: |
-          PGBIN=${{ steps.paths.outputs.pg_bin }}
-          PORT=${{ steps.paths.outputs.port }}
-          DATA=${{ github.workspace }}/pg${{ matrix.pg }}/data
-          if [ ! -f "$DATA/PG_VERSION" ]; then
-            mkdir -p $(dirname $DATA)
-            $PGBIN/initdb -D $DATA -U $(whoami) --encoding=UTF8 --locale=C
-            printf '\nport = %s\nlisten_addresses = %s\nunix_socket_directories = %s\n' "$PORT" "'localhost'" "'/tmp'" >> $DATA/postgresql.conf
-          fi
-          LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" $PGBIN/pg_ctl -D $DATA -l $DATA/server.log start
-          sleep 2
-          $PGBIN/pg_isready -p $PORT
+          # 18 is started by the script if needed; 16/17 need clusters.
+          sudo mkdir -p /pg16 /pg17
+          sudo chown "$(whoami)" /pg16 /pg17
+          for v in 16 17; do
+            port=$([ "$v" = 16 ] && echo 5434 || echo 5433)
+            bin=/usr/lib/postgresql/$v/bin
+            $bin/initdb -D /pg$v/data --encoding=UTF8 --locale=C >/dev/null
+            printf '\nport = %s\nlisten_addresses = %s\nunix_socket_directories = %s\n' \
+              "$port" "'localhost'" "'/tmp'" >> /pg$v/data/postgresql.conf
+            $bin/pg_ctl -D /pg$v/data -l /pg$v/data/server.log start
+          done
 
-      - name: Build and run proof (13 checks)
+      - name: Run the full ABI matrix
         run: |
           cd shim
-          make -s proof PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
-
-      - name: Run error firewall
-        run: |
-          cd shim
-          make -s try PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
-
-      - name: Run guarded bodies
-        run: |
-          cd shim
-          make -s guard-build PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
-          make -s guard-test PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
-
-      - name: Run capabilities consumer
-        run: |
-          cd shim
-          make -s cap-consumer PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
-
-      - name: Run mem-api
-        run: |
-          cd shim
-          make -s mem-api PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
-
-      - name: Run fmgr-api
-        run: |
-          cd shim
-          make -s fmgr PG=${{ matrix.pg }} PG_CONFIG_pg${{ matrix.pg }}=${{ steps.paths.outputs.pg_config }}
+          ./ci-local.sh

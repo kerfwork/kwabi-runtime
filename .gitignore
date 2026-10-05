@@ -1,2 +1,8 @@
 /target
 **/target
+
+# Build artifacts
+*.dylib
+*.so
+*.o
+*.a
