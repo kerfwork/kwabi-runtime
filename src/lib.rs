@@ -331,7 +331,6 @@ unsafe extern "C" fn rt_elog(level: c_int, msg: *const c_char, _varargs: *const 
 /// # Safety
 ///
 /// `native` must point to a valid `KwabiNative` that outlives the process.
-#[no_mangle]
 /// Capabilities of a caller-supplied table. Exported for the shim, which owns
 /// the final table (it installs `try_body`, `error_get` and the memory
 /// accessors onto a copy of the runtime's). Asking the runtime's own table
@@ -340,6 +339,7 @@ unsafe extern "C" fn rt_elog(level: c_int, msg: *const c_char, _varargs: *const 
 /// # Safety
 ///
 /// `table` must be null or point to a valid `KwabiV1`.
+#[no_mangle]
 pub unsafe extern "C" fn kwabi_capabilities_of(table: *const KwabiV1, pg_major: u32) -> u64 {
     capabilities_of(table, pg_major)
 }

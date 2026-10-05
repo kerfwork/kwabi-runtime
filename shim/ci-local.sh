@@ -222,7 +222,11 @@ echo "  hash : $CANARY_HASH"
 # The guarded-body canary is a second version-independent artifact. It must be
 # pinned the same way, or a major could quietly get its own copy.
 GUARDED_CANARY="../canary/guarded/target/release/libguarded_canary.$DLSUFFIX"
-make -s guard-build >/dev/null 2>&1
+SUDO=""
+if [ ! -w "$(dirname "$GUARDED_CANARY")" ]; then
+    SUDO="sudo"
+fi
+$SUDO make -s guard-build >/dev/null 2>&1
 if [ ! -f "$GUARDED_CANARY" ]; then
     record FAIL canary "guarded canary was not built"
     exit 1
@@ -300,7 +304,11 @@ for M in "${MAJORS[@]}"; do
 
     # --- install both objects -------------------------------------------
     PKGLIB=$("$PGC" --pkglibdir)
-    if ! make -s install PG="$M" >/dev/null 2>&1; then
+    SUDO=""
+    if [ ! -w "$PKGLIB" ]; then
+        SUDO="sudo"
+    fi
+    if ! $SUDO make -s install PG="$M" >/dev/null 2>&1; then
         record FAIL "$M" "install into $PKGLIB failed"
         continue
     fi
@@ -308,7 +316,7 @@ for M in "${MAJORS[@]}"; do
     # The guarded-body canary is a separate crate (it depends on the Rust SDK),
     # so it is not part of `install`. It is version-independent like the plain
     # canary: built once, installed into every $libdir.
-    if ! make -s guard-build PG="$M" >/dev/null 2>&1; then
+    if ! $SUDO make -s guard-build PG="$M" >/dev/null 2>&1; then
         record FAIL "$M" "guarded canary failed to build"
         echo "      see: cd ../canary/guarded && cargo build --release"
         continue
@@ -320,7 +328,7 @@ for M in "${MAJORS[@]}"; do
 
     # The cross-version error test is its own module and does not use the
     # runtime at all — it exercises the size protocol directly.
-    if ! make -s -C ../errsize install PG="$M" >/dev/null 2>&1; then
+    if ! $SUDO make -s -C ../errsize install PG="$M" >/dev/null 2>&1; then
         record FAIL "$M" "errsize module failed to build/install"
         continue
     fi
