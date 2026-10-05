@@ -182,7 +182,7 @@ pub unsafe fn write_error_to(out: *mut KwabiError, err: &KwabiError) {
 ///
 /// Single-threaded per backend, as PostgreSQL guarantees for extension code.
 pub unsafe fn set_last_error_from(e: &KwabiError) {
-    let dst = std::ptr::addr_of_mut!(LAST_ERROR) as *mut KwabiError;
+    let dst = std::ptr::addr_of_mut!(LAST_ERROR);
     std::ptr::copy_nonoverlapping(e as *const KwabiError, dst, 1);
 }
 

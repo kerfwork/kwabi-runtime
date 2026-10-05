@@ -93,7 +93,7 @@ unsafe extern "C" fn stub_context_delete(ctx: *mut c_void) {
 }
 
 unsafe extern "C" fn stub_error_message() -> *const c_char {
-    b"stub: postgres error\0".as_ptr() as *const c_char
+    c"stub: postgres error".as_ptr()
 }
 
 unsafe extern "C" fn stub_error_code() -> c_int {
@@ -339,7 +339,7 @@ fn unimplemented_slots_are_null_not_garbage() {
     // so an extension testing the slot sees "not implemented" instead of
     // jumping into a stale address.
     let api = ensure_init();
-    assert!(api != ptr::null());
+    assert!(!api.is_null());
     let t = unsafe { &*api };
     assert!(t.palloc.is_some());
     assert!(t.error_message.is_some());
@@ -363,7 +363,7 @@ fn error_firewall_keeps_runtime_errors_out_of_postgres() {
 
     // A runtime-raised error must win, and must not have gone through
     // PostgreSQL's error machinery at all.
-    let raised = unsafe { kwabi_raise(42, b"kwabi: bad handle\0".as_ptr() as *const c_char) };
+    let raised = unsafe { kwabi_raise(42, c"kwabi: bad handle".as_ptr()) };
     assert!(raised);
     assert_eq!(unsafe { ext.error_code() }, 42);
     assert_eq!(
@@ -416,9 +416,11 @@ fn capabilities_of_empty_table_is_empty() {
 fn atomic_body_withheld_on_unmeasured_major() {
     // A table that has the firewall wired, so the only reason to withhold
     // ATOMIC_BODY is the version.
-    let mut t = KwabiV1::default();
-    t.try_body = Some(dummy_body_slot);
-    t.error_get = Some(dummy_error_get);
+    let t = KwabiV1 {
+        try_body: Some(dummy_body_slot),
+        error_get: Some(dummy_error_get),
+        ..Default::default()
+    };
 
     for major in [16u32, 17, 18] {
         let caps = unsafe { kwabi_runtime::capabilities_of(&t as *const KwabiV1, major) };
