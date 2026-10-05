@@ -118,6 +118,9 @@ typedef void *KwabiFmgrInfo;
 typedef void *KwabiSPIResult;
 typedef void *KwabiSPIPlan;
 typedef void *KwabiOutputPluginCallbacks;
+typedef void *KwabiList;
+typedef void *KwabiPlan;
+typedef void *KwabiSlot;
 
 /* ========================================================================
  * Basic type aliases (matching PostgreSQL's types)
@@ -226,6 +229,7 @@ typedef enum {
     KWABI_NODE_JOIN_EXPR,
     KWABI_NODE_FROM_EXPR,
     KWABI_NODE_ON_CONFLICT_EXPR,
+    KWABI_NODE_TYPE_NAME,
 } KwabiNodeType;
 
 typedef enum {
@@ -628,6 +632,7 @@ typedef struct KwabiV1 {
 
     /* ---- Parser ---- */
     KwabiNode (*parse_expr)(const char *sql, Oid *argtypes, int nargs);
+    KwabiNode (*parse_stmt)(const char *sql);
     KwabiNode (*parse_type)(const char *type_name);
     void (*free_node)(KwabiNode node);
     Oid (*oper_left_type)(Oid oper_oid);
@@ -702,8 +707,8 @@ typedef struct KwabiV1 {
     /* ---- Optimizer ---- */
     KwabiPlannerInfo (*planner_info)(KwabiNode parse, int cursorOptions, ParamListInfo boundParams);
     void (*free_planner_info)(KwabiPlannerInfo info);
-    double (*planner_estimate_rows)(KwabiPlannerInfo info, List quals);
-    double (*planner_estimate_cost)(KwabiPlannerInfo info, List quals);
+    double (*planner_estimate_rows)(KwabiPlannerInfo info, KwabiList quals);
+    double (*planner_estimate_cost)(KwabiPlannerInfo info, KwabiList quals);
 
     /* ---- Transactions ---- */
     void (*transaction_start)(void);
@@ -740,23 +745,23 @@ typedef struct KwabiV1 {
     /* ---- Node trees ---- */
     KwabiNodeType (*node_type)(KwabiNode node);
     const char *(*node_type_name)(KwabiNode node);
-    List (*node_get_list)(KwabiNode node);
+    KwabiList (*node_get_list)(KwabiNode node);
     int (*node_list_length)(KwabiNode node);
     KwabiNode (*node_list_get)(KwabiNode node, int index);
     KwabiCmdType (*query_command_type)(KwabiNode query);
-    List (*query_rtable)(KwabiNode query);
-    List (*query_target_list)(KwabiNode query);
-    List (*query_returning_list)(KwabiNode query);
-    Node (*query_jointree)(KwabiNode query);
-    List (*query_group_clause)(KwabiNode query);
-    List (*query_sort_clause)(KwabiNode query);
-    Node (*query_limit_offset)(KwabiNode query);
-    Node (*query_limit_count)(KwabiNode query);
+    KwabiList (*query_rtable)(KwabiNode query);
+    KwabiList (*query_target_list)(KwabiNode query);
+    KwabiList (*query_returning_list)(KwabiNode query);
+    KwabiNode (*query_jointree)(KwabiNode query);
+    KwabiList (*query_group_clause)(KwabiNode query);
+    KwabiList (*query_sort_clause)(KwabiNode query);
+    KwabiNode (*query_limit_offset)(KwabiNode query);
+    KwabiNode (*query_limit_count)(KwabiNode query);
     bool (*query_has_for_update)(KwabiNode query);
     bool (*query_has_row_security)(KwabiNode query);
-    Plan (*planned_stmt_plan_tree)(KwabiNode stmt);
-    List (*planned_stmt_rtable)(KwabiNode stmt);
-    List (*planned_stmt_result_relations)(KwabiNode stmt);
+    KwabiPlan (*planned_stmt_plan_tree)(KwabiNode stmt);
+    KwabiList (*planned_stmt_rtable)(KwabiNode stmt);
+    KwabiList (*planned_stmt_result_relations)(KwabiNode stmt);
     bool (*planned_stmt_has_returning)(KwabiNode stmt);
     bool (*planned_stmt_has_modifying_cte)(KwabiNode stmt);
     bool (*planned_stmt_is_utility)(KwabiNode stmt);
@@ -769,28 +774,28 @@ typedef struct KwabiV1 {
     bool (*tuple_attisdropped)(TupleDesc tupdesc, int attno);
     int (*tuple_attnum)(TupleDesc tupdesc, const char *attname);
     Datum (*heap_tuple_getattr)(HeapTuple tuple, int attno, TupleDesc tupdesc, bool *isnull);
-    void (*heap_tuple_setattr)(HeapTuple tuple, int attno, Datum value, TupleDesc tupdesc);
+    HeapTuple (*heap_tuple_setattr)(HeapTuple tuple, int attno, Datum value, TupleDesc tupdesc);
     Oid (*heap_tuple_tableoid)(HeapTuple tuple);
     ItemPointer (*heap_tuple_tid)(HeapTuple tuple);
-    bool (*slot_isnull)(TupleTableSlot slot, int attno);
-    Datum (*slot_getattr)(TupleTableSlot slot, int attno, bool *isnull);
-    TupleDesc (*slot_tupledesc)(TupleTableSlot slot);
+    bool (*slot_isnull)(KwabiSlot slot, int attno);
+    Datum (*slot_getattr)(KwabiSlot slot, int attno, bool *isnull);
+    TupleDesc (*slot_tupledesc)(KwabiSlot slot);
 
     /* ---- Table AM ---- */
     KwabiTableAm (*table_am_get)(Oid relid);
     TableScanDesc (*table_am_beginscan)(KwabiTableAm am, Snapshot snapshot, int nkeys, ScanKey key);
     void (*table_am_endscan)(TableScanDesc scan);
-    bool (*table_am_getnext)(TableScanDesc scan, TupleTableSlot slot);
-    void (*table_am_insert)(KwabiTableAm am, TupleTableSlot slot, int options, BulkInsertState bistate);
-    void (*table_am_update)(KwabiTableAm am, TupleTableSlot slot, int options);
-    void (*table_am_delete)(KwabiTableAm am, TupleTableSlot slot, int options);
+    bool (*table_am_getnext)(TableScanDesc scan, KwabiSlot slot);
+    void (*table_am_insert)(KwabiTableAm am, KwabiSlot slot, int options, BulkInsertState bistate);
+    void (*table_am_update)(KwabiTableAm am, KwabiSlot slot, int options);
+    void (*table_am_delete)(KwabiTableAm am, KwabiSlot slot, int options);
 
     /* ---- Executor ---- */
     KwabiEState (*executor_start)(QueryDesc queryDesc, int eflags);
     void (*executor_run)(KwabiEState estate, int direction, long count, bool execute_once);
     void (*executor_finish)(KwabiEState estate);
     void (*executor_end)(KwabiEState estate);
-    TupleTableSlot (*executor_getnext)(KwabiEState estate);
+    KwabiSlot (*executor_getnext)(KwabiEState estate);
 
     /* ---- Buffer manager ---- */
     Buffer (*buffer_get)(Relation rel, BlockNumber blocknum);
@@ -854,7 +859,7 @@ typedef struct KwabiV1 {
     char (*rel_relkind)(KwabiRelation rel);
     Oid (*rel_relam)(KwabiRelation rel);
     TupleDesc (*rel_tupledesc)(KwabiRelation rel);
-    List (*rel_index_list)(KwabiRelation rel);
+    KwabiList (*rel_index_list)(KwabiRelation rel);
 
     /* ---- String info ---- */
     void (*stringinfo_init)(StringInfo str);

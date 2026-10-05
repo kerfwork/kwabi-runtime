@@ -93,7 +93,7 @@ unsafe extern "C" fn stub_context_delete(ctx: *mut c_void) {
 }
 
 unsafe extern "C" fn stub_error_message() -> *const c_char {
-    c"stub: postgres error".as_ptr()
+    b"stub: postgres error\0".as_ptr() as *const c_char
 }
 
 unsafe extern "C" fn stub_error_code() -> c_int {
@@ -215,11 +215,7 @@ fn table_layout_is_stable() {
     // Appended slots move this number. That is the intended workflow for an
     // append-only ABI, and this assertion is what makes the change deliberate:
     // it cannot happen by accident.
-    assert_eq!(
-        KwabiV1::FIELD_COUNT,
-        205,
-        "field count changed — kwabi.h edited?"
-    );
+    assert_eq!(KwabiV1::FIELD_COUNT, 205, "field count changed — kwabi.h edited?");
 }
 
 /// The SDK's hand-written mirror must match the header, field for field.
@@ -334,10 +330,7 @@ fn extension_reaches_stub_postgres_through_the_table() {
     );
 
     unsafe { ext.free(p) };
-    assert!(
-        FREE_COUNT.load(Ordering::SeqCst) >= 1,
-        "pfree must reach the stub"
-    );
+    assert!(FREE_COUNT.load(Ordering::SeqCst) >= 1, "pfree must reach the stub");
 }
 
 #[test]
@@ -346,20 +339,14 @@ fn unimplemented_slots_are_null_not_garbage() {
     // so an extension testing the slot sees "not implemented" instead of
     // jumping into a stale address.
     let api = ensure_init();
-    assert!(!api.is_null());
+    assert!(api != ptr::null());
     let t = unsafe { &*api };
     assert!(t.palloc.is_some());
     assert!(t.error_message.is_some());
     assert!(t.fmgr_info.is_none(), "fmgr is not wired in the skeleton");
     assert!(t.spi_execute.is_none(), "SPI is not wired in the skeleton");
-    assert!(
-        t.table_am_get.is_none(),
-        "table AM is not wired in the skeleton"
-    );
-    assert!(
-        t.node_type.is_none(),
-        "node IR is not wired in the skeleton"
-    );
+    assert!(t.table_am_get.is_none(), "table AM is not wired in the skeleton");
+    assert!(t.node_type.is_none(), "node IR is not wired in the skeleton");
 }
 
 #[test]
@@ -370,21 +357,17 @@ fn error_firewall_keeps_runtime_errors_out_of_postgres() {
     // Baseline: the runtime defers to the stub PostgreSQL.
     unsafe { ext.error_clear() };
     assert_eq!(
-        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }
-            .to_str()
-            .unwrap(),
+        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }.to_str().unwrap(),
         "stub: postgres error"
     );
 
     // A runtime-raised error must win, and must not have gone through
     // PostgreSQL's error machinery at all.
-    let raised = unsafe { kwabi_raise(42, c"kwabi: bad handle".as_ptr()) };
+    let raised = unsafe { kwabi_raise(42, b"kwabi: bad handle\0".as_ptr() as *const c_char) };
     assert!(raised);
     assert_eq!(unsafe { ext.error_code() }, 42);
     assert_eq!(
-        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }
-            .to_str()
-            .unwrap(),
+        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }.to_str().unwrap(),
         "kwabi: bad handle"
     );
 
@@ -392,9 +375,7 @@ fn error_firewall_keeps_runtime_errors_out_of_postgres() {
     unsafe { ext.error_clear() };
     assert_eq!(unsafe { ext.error_code() }, 0);
     assert_eq!(
-        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }
-            .to_str()
-            .unwrap(),
+        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }.to_str().unwrap(),
         "stub: postgres error"
     );
 }
@@ -435,11 +416,9 @@ fn capabilities_of_empty_table_is_empty() {
 fn atomic_body_withheld_on_unmeasured_major() {
     // A table that has the firewall wired, so the only reason to withhold
     // ATOMIC_BODY is the version.
-    let t = KwabiV1 {
-        try_body: Some(dummy_body_slot),
-        error_get: Some(dummy_error_get),
-        ..Default::default()
-    };
+    let mut t = KwabiV1::default();
+    t.try_body = Some(dummy_body_slot);
+    t.error_get = Some(dummy_error_get);
 
     for major in [16u32, 17, 18] {
         let caps = unsafe { kwabi_runtime::capabilities_of(&t as *const KwabiV1, major) };

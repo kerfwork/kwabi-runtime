@@ -155,7 +155,8 @@ pub unsafe fn write_error_to(out: *mut KwabiError, err: &KwabiError) {
     macro_rules! guarded {
         ($field:ident) => {
             if caller_size
-                >= std::mem::offset_of!(KwabiError, $field) + std::mem::size_of_val(&err.$field)
+                >= std::mem::offset_of!(KwabiError, $field)
+                    + std::mem::size_of_val(&err.$field)
             {
                 (*out).$field = err.$field;
             }
@@ -181,7 +182,7 @@ pub unsafe fn write_error_to(out: *mut KwabiError, err: &KwabiError) {
 ///
 /// Single-threaded per backend, as PostgreSQL guarantees for extension code.
 pub unsafe fn set_last_error_from(e: &KwabiError) {
-    let dst = std::ptr::addr_of_mut!(LAST_ERROR);
+    let dst = std::ptr::addr_of_mut!(LAST_ERROR) as *mut KwabiError;
     std::ptr::copy_nonoverlapping(e as *const KwabiError, dst, 1);
 }
 

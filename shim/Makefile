@@ -95,7 +95,7 @@ endif
 # vendor/kwabi/include/, while the published repo vendors the SDK crate with the
 # header at vendor/kwabi/kwabi.h. Resolve whichever is present so the same
 # Makefile works in both, rather than forcing one layout on the other.
-KWABI_INC := $(dir $(firstword $(wildcard $(RUNTIME_DIR)/vendor/kwabi/include/kwabi.h) $(RUNTIME_DIR)/vendor/kwabi/kwabi.h)))
+KWABI_INC := $(firstword $(wildcard $(RUNTIME_DIR)/vendor/kwabi/include) $(RUNTIME_DIR)/vendor/kwabi)
 
 # kwabi.h lives in notes/, one level above the runtime crate.
 PG_CFLAGS := -I$(PGINC) $(EXTRA_INC) -I$(KWABI_INC) \

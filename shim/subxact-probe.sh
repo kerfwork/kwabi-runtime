@@ -43,7 +43,7 @@ python3 make_nosubxact_variant.py kwabi_runtime_shim.c "$VARIANT_SRC" \
   || { echo "FAIL: could not generate the stripped variant"; exit 1; }
 
 cc -bundle -Wl,-undefined,dynamic_lookup -fPIC -w \
-   -I"$PGINC" -I/opt/homebrew/include -I"$RUNTIME_DIR/vendor/kwabi" -I"$RUNTIME_DIR" \
+   -I"$PGINC" -I/opt/homebrew/include -I"$RUNTIME_DIR/.." -I"$RUNTIME_DIR" \
    -o "/tmp/$VARIANT_LIB" "$VARIANT_SRC" "$RUNTIME_DIR/target/release/libkwabi_runtime.a" \
   || { echo "FAIL: could not build the stripped variant"; exit 1; }
 
