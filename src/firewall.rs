@@ -155,8 +155,7 @@ pub unsafe fn write_error_to(out: *mut KwabiError, err: &KwabiError) {
     macro_rules! guarded {
         ($field:ident) => {
             if caller_size
-                >= std::mem::offset_of!(KwabiError, $field)
-                    + std::mem::size_of_val(&err.$field)
+                >= std::mem::offset_of!(KwabiError, $field) + std::mem::size_of_val(&err.$field)
             {
                 (*out).$field = err.$field;
             }

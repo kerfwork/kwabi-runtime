@@ -49,8 +49,7 @@ pub const KWABI_ERRNAME_MAX: usize = 128;
 /// we compiled against is at least this large, so the bit cannot be
 /// claimed by a build whose struct has no detail/hint/object fields.
 pub const KWABI_ERR_STRUCTURED_MIN: usize =
-    4 + 4 + 4 + KWABI_ERRMSG_MAX + KWABI_ERRDETAIL_MAX + KWABI_ERRHINT_MAX
-        + 5 * KWABI_ERRNAME_MAX;
+    4 + 4 + 4 + KWABI_ERRMSG_MAX + KWABI_ERRDETAIL_MAX + KWABI_ERRHINT_MAX + 5 * KWABI_ERRNAME_MAX;
 
 /// The structured error channel.
 ///
@@ -78,7 +77,9 @@ pub struct KwabiError {
 
 impl KwabiError {
     /// Offset of a field, for the size guards the writer uses.
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl Default for KwabiError {
@@ -114,19 +115,33 @@ impl Default for KwabiError {
 /// reports a STRUCTURED error rather than only a status. Added after the
 /// first prototype, where `(void *arg)` alone left the body with no way
 /// to reach the channel at all.
-pub type KwabiBodyFn =
-    unsafe extern "C" fn(*mut c_void, *mut KwabiError) -> c_int;
+pub type KwabiBodyFn = unsafe extern "C" fn(*mut c_void, *mut KwabiError) -> c_int;
 
 #[repr(C)]
 pub struct KwabiV1 {
     pub version: u32,
     pub fmgr_info: Option<unsafe extern "C" fn(u32) -> *mut c_void>,
-    pub call_function: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut usize, *const bool, *mut bool, *mut usize) -> c_int>,
-    pub call_function1: Option<unsafe extern "C" fn(*mut c_void, usize, *mut bool, *mut usize) -> c_int>,
-    pub call_function2: Option<unsafe extern "C" fn(*mut c_void, usize, usize, *mut bool, *mut usize) -> c_int>,
-    pub call_function3: Option<unsafe extern "C" fn(*mut c_void, usize, usize, usize, *mut bool, *mut usize) -> c_int>,
+    pub call_function: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            c_int,
+            *mut usize,
+            *const bool,
+            *mut bool,
+            *mut usize,
+        ) -> c_int,
+    >,
+    pub call_function1:
+        Option<unsafe extern "C" fn(*mut c_void, usize, *mut bool, *mut usize) -> c_int>,
+    pub call_function2:
+        Option<unsafe extern "C" fn(*mut c_void, usize, usize, *mut bool, *mut usize) -> c_int>,
+    pub call_function3: Option<
+        unsafe extern "C" fn(*mut c_void, usize, usize, usize, *mut bool, *mut usize) -> c_int,
+    >,
     pub spi_execute: Option<unsafe extern "C" fn(*const c_char, bool, c_int) -> *mut c_void>,
-    pub spi_execute_plan: Option<unsafe extern "C" fn(*mut c_void, *mut usize, *const c_char, bool, c_int) -> *mut c_void>,
+    pub spi_execute_plan: Option<
+        unsafe extern "C" fn(*mut c_void, *mut usize, *const c_char, bool, c_int) -> *mut c_void,
+    >,
     pub spi_free_result: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub spi_result_ntuples: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     pub spi_result_get_value: Option<unsafe extern "C" fn(*mut c_void, c_int, c_int) -> usize>,
@@ -155,10 +170,12 @@ pub struct KwabiV1 {
     pub sequence_setval: Option<unsafe extern "C" fn(u32, i64) -> i64>,
     pub logical_decoding_begin: Option<unsafe extern "C" fn(u32, i64) -> *mut c_void>,
     pub logical_decoding_end: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
-    pub logical_decoding_read: Option<unsafe extern "C" fn(*mut c_void, *mut i64, *mut c_void) -> bool>,
+    pub logical_decoding_read:
+        Option<unsafe extern "C" fn(*mut c_void, *mut i64, *mut c_void) -> bool>,
     pub output_plugin_startup: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub output_plugin_shutdown: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
-    pub bgworker_register: Option<unsafe extern "C" fn(*const c_char, *mut c_void, *mut c_void) -> u32>,
+    pub bgworker_register:
+        Option<unsafe extern "C" fn(*const c_char, *mut c_void, *mut c_void) -> u32>,
     pub bgworker_terminate: Option<unsafe extern "C" fn(u32) -> ()>,
     pub bgworker_is_running: Option<unsafe extern "C" fn(u32) -> bool>,
     pub block_get_number: Option<unsafe extern "C" fn(*mut c_void) -> u32>,
@@ -216,7 +233,8 @@ pub struct KwabiV1 {
     pub walsender_send: Option<unsafe extern "C" fn(*const c_char, c_int) -> ()>,
     pub walsender_receive: Option<unsafe extern "C" fn(*mut c_char, c_int) -> c_int>,
     pub walsender_is_connected: Option<unsafe extern "C" fn() -> bool>,
-    pub defrem_create: Option<unsafe extern "C" fn(*const c_char, *const c_char, *const c_char) -> ()>,
+    pub defrem_create:
+        Option<unsafe extern "C" fn(*const c_char, *const c_char, *const c_char) -> ()>,
     pub defrem_alter: Option<unsafe extern "C" fn(*const c_char, *const c_char) -> ()>,
     pub defrem_drop: Option<unsafe extern "C" fn(*const c_char) -> ()>,
     pub node_type: Option<unsafe extern "C" fn(*mut c_void) -> u32>,
@@ -247,18 +265,22 @@ pub struct KwabiV1 {
     pub tuple_attname: Option<unsafe extern "C" fn(*mut c_void, c_int) -> *const c_char>,
     pub tuple_attisdropped: Option<unsafe extern "C" fn(*mut c_void, c_int) -> bool>,
     pub tuple_attnum: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int>,
-    pub heap_tuple_getattr: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut c_void, *mut bool) -> usize>,
-    pub heap_tuple_setattr: Option<unsafe extern "C" fn(*mut c_void, c_int, usize, *mut c_void) -> *mut c_void>,
+    pub heap_tuple_getattr:
+        Option<unsafe extern "C" fn(*mut c_void, c_int, *mut c_void, *mut bool) -> usize>,
+    pub heap_tuple_setattr:
+        Option<unsafe extern "C" fn(*mut c_void, c_int, usize, *mut c_void) -> *mut c_void>,
     pub heap_tuple_tableoid: Option<unsafe extern "C" fn(*mut c_void) -> u32>,
     pub heap_tuple_tid: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
     pub slot_isnull: Option<unsafe extern "C" fn(*mut c_void, c_int) -> bool>,
     pub slot_getattr: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut bool) -> usize>,
     pub slot_tupledesc: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
     pub table_am_get: Option<unsafe extern "C" fn(u32) -> *mut c_void>,
-    pub table_am_beginscan: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, *mut c_void) -> *mut c_void>,
+    pub table_am_beginscan:
+        Option<unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, *mut c_void) -> *mut c_void>,
     pub table_am_endscan: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub table_am_getnext: Option<unsafe extern "C" fn(*mut c_void, *mut c_void) -> bool>,
-    pub table_am_insert: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, *mut c_void) -> ()>,
+    pub table_am_insert:
+        Option<unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, *mut c_void) -> ()>,
     pub table_am_update: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, c_int) -> ()>,
     pub table_am_delete: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, c_int) -> ()>,
     pub executor_start: Option<unsafe extern "C" fn(*mut c_void, c_int) -> *mut c_void>,
@@ -285,10 +307,20 @@ pub struct KwabiV1 {
     pub guc_set_string: Option<unsafe extern "C" fn(*const c_char, *const c_char) -> ()>,
     pub guc_set_bool: Option<unsafe extern "C" fn(*const c_char, bool) -> ()>,
     pub guc_set_float: Option<unsafe extern "C" fn(*const c_char, f64) -> ()>,
-    pub explain_query: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const c_char, *mut c_void, *mut c_void) -> ()>,
+    pub explain_query: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            *const c_char,
+            *mut c_void,
+            *mut c_void,
+        ) -> (),
+    >,
     pub explain_get_index_name: Option<unsafe extern "C" fn(u32) -> *const c_char>,
     pub vacuum_rel: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> ()>,
-    pub vacuum_analyze_rel: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> ()>,
+    pub vacuum_analyze_rel:
+        Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> ()>,
     pub trigger_desc: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
     pub trigger_count: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     pub trigger_get: Option<unsafe extern "C" fn(*mut c_void, c_int) -> *mut c_void>,
