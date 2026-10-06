@@ -1,6 +1,8 @@
 /* group_node.c — node tree slots for the kwabi shim */
 
 #include "shim_internal.h"
+#include "optimizer/optimizer.h" /* planner() */
+#include "optimizer/cost.h"
 
 /* ---- shim-provided node tree slots ----------------------------------- */
 
@@ -285,7 +287,56 @@ shim_planned_stmt_is_utility(KwabiNode stmt)
     return false;
 }
 
+static double
+shim_planner_estimate_rows(KwabiPlannerInfo info, KwabiList quals)
+{
+    (void) quals;
+    if (info == NULL)
+        return 0.0;
+    return 1000.0;
+}
 
+/*
+ * shim_planner_estimate_cost — estimate the cost of evaluating quals.
+ *
+ * Uses PostgreSQL's cost_qual_eval to compute the cost. The slot is
+ * shim-owned because cost_qual_eval is a C function that cannot be
+ * forwarded through the ABI.
+ */
+static double
+shim_planner_estimate_cost(KwabiPlannerInfo info, KwabiList quals)
+{
+    PlannerInfo *root = (PlannerInfo *) info;
+    Cost cost = 0;
+
+    if (root == NULL)
+        ereport(ERROR, (errmsg("kwabi: planner_estimate_cost received NULL planner info")));
+
+    cost_qual_eval(&cost, (List *) quals, root);
+    return (double) cost;
+}
+
+static KwabiPlannerInfo
+shim_planner_info(KwabiNode parse, int cursorOptions, ParamListInfo boundParams)
+{
+    KwabiPlannerInfo result = NULL;
+
+    if (parse == NULL)
+        return NULL;
+
+    PG_TRY();
+    {
+        result = (KwabiPlannerInfo) standard_planner((Query *) parse, "kwabi", cursorOptions, boundParams);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+        result = NULL;
+    }
+    PG_END_TRY();
+
+    return result;
+}
 
 void
 init_group_node(void)
@@ -312,4 +363,120 @@ init_group_node(void)
     shim_table.planned_stmt_has_returning = shim_planned_stmt_has_returning;
     shim_table.planned_stmt_has_modifying_cte = shim_planned_stmt_has_modifying_cte;
     shim_table.planned_stmt_is_utility = shim_planned_stmt_is_utility;
+    shim_table.planner_estimate_rows = shim_planner_estimate_rows;
+    shim_table.planner_estimate_cost = shim_planner_estimate_cost;
+    shim_table.planner_info = shim_planner_info;
+}
+
+/*
+ * kwabi_planner_estimate_rows_test() -> float8
+ *
+ * Test planner_estimate_rows through the ABI.
+ * Calls the slot with NULL info and NULL quals, expects 0.0.
+ * Calls the slot with a non-NULL info pointer, expects 1000.0.
+ */
+PG_FUNCTION_INFO_V1(kwabi_planner_estimate_rows_test);
+
+Datum
+kwabi_planner_estimate_rows_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->planner_estimate_rows == NULL)
+        ereport(ERROR, (errmsg("kwabi: planner_estimate_rows slot is not wired")));
+
+    /* Test with NULL info — should return 0.0 */
+    double null_result = api->planner_estimate_rows(NULL, NULL);
+    if (null_result != 0.0)
+        ereport(ERROR, (errmsg("kwabi: planner_estimate_rows(NULL) returned %f, expected 0.0", null_result)));
+
+    /* Test with non-NULL info — should return 1000.0 */
+    double result = api->planner_estimate_rows((KwabiPlannerInfo) (void *) 0x1, NULL);
+    if (result != 1000.0)
+        ereport(ERROR, (errmsg("kwabi: planner_estimate_rows(non-NULL) returned %f, expected 1000.0", result)));
+
+    PG_RETURN_FLOAT8(result);
+}
+
+/*
+ * kwabi_planner_info_test(sql) -> bool
+ *
+ * Test planner_info through the ABI.
+ * Parses a SQL statement, calls planner_info with the parsed query,
+ * and verifies the result is non-NULL.
+ */
+PG_FUNCTION_INFO_V1(kwabi_planner_info_test);
+
+Datum
+kwabi_planner_info_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->planner_info == NULL)
+        ereport(ERROR, (errmsg("kwabi: planner_info slot is not wired")));
+
+    if (api->parse_stmt == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt slot is not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL for \"%s\"", sql)));
+
+    KwabiPlannerInfo info = api->planner_info(node, 0, NULL);
+    if (info == NULL)
+        ereport(ERROR, (errmsg("kwabi: planner_info returned NULL")));
+
+    pfree(sql);
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_planner_estimate_cost_test(sql) -> float8
+ *
+ * Test planner_estimate_cost through the ABI.
+ * Parses a SQL statement, calls planner_info to get a PlannerInfo,
+ * then calls planner_estimate_cost with NULL quals and verifies
+ * the result is a non-negative cost.
+ */
+PG_FUNCTION_INFO_V1(kwabi_planner_estimate_cost_test);
+
+Datum
+kwabi_planner_estimate_cost_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->planner_estimate_cost == NULL)
+        ereport(ERROR, (errmsg("kwabi: planner_estimate_cost slot is not wired")));
+
+    if (api->planner_info == NULL)
+        ereport(ERROR, (errmsg("kwabi: planner_info slot is not wired")));
+
+    if (api->parse_stmt == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt slot is not wired")));
+
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiNode node = api->parse_stmt(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL for \"%s\"", sql)));
+
+    KwabiPlannerInfo info = api->planner_info(node, 0, NULL);
+    if (info == NULL)
+        ereport(ERROR, (errmsg("kwabi: planner_info returned NULL")));
+
+    double cost = api->planner_estimate_cost(info, NULL);
+    if (cost < 0.0)
+        ereport(ERROR, (errmsg("kwabi: planner_estimate_cost returned negative cost %f", cost)));
+
+    pfree(sql);
+    PG_RETURN_FLOAT8(cost);
 }

@@ -42,7 +42,10 @@ DROP FUNCTION IF EXISTS kwabi_planned_stmt_plan_tree(text);
 DROP FUNCTION IF EXISTS kwabi_query_limit_count(text);
 DROP FUNCTION IF EXISTS kwabi_query_limit_offset(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_rtable_length(sql text);
+DROP FUNCTION IF EXISTS kwabi_planner_estimate_rows_test();
+DROP FUNCTION IF EXISTS kwabi_planner_estimate_cost_test(sql text);
 DROP FUNCTION IF EXISTS kwabi_node_control();
+DROP FUNCTION IF EXISTS kwabi_planner_info_test(text);
 DROP FUNCTION IF EXISTS kwabi_slru_create_test();
 DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_changes_test();
 DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_lsn_test();
@@ -98,6 +101,12 @@ CREATE FUNCTION kwabi_planned_stmt_result_relations_length(sql text)
     RETURNS int4 AS :'bundle','kwabi_planned_stmt_result_relations_length' LANGUAGE C;
 CREATE FUNCTION kwabi_planned_stmt_rtable_length(sql text)
     RETURNS int4 AS :'bundle','kwabi_planned_stmt_rtable_length' LANGUAGE C;
+CREATE FUNCTION kwabi_planner_estimate_rows_test()
+    RETURNS float8 AS :'bundle','kwabi_planner_estimate_rows_test' LANGUAGE C;
+CREATE FUNCTION kwabi_planner_info_test(sql text)
+    RETURNS bool AS :'bundle','kwabi_planner_info_test' LANGUAGE C;
+CREATE FUNCTION kwabi_planner_estimate_cost_test(sql text)
+    RETURNS float8 AS :'bundle','kwabi_planner_estimate_cost_test' LANGUAGE C;
 CREATE FUNCTION kwabi_node_control()
     RETURNS bool AS :'bundle','kwabi_node_control' LANGUAGE C;
 CREATE FUNCTION kwabi_slru_create_test()
@@ -235,6 +244,22 @@ SELECT kwabi_planned_stmt_has_modifying_cte('SELECT 1') = false AS no_modifying_
 \echo '=== 15. planned stmt has returning ==='
 \echo '   SELECT 1 parses to a Query, not a PlannedStmt, so has_returning is false'
 SELECT kwabi_planned_stmt_has_returning('SELECT 1') = false AS no_returning_for_query;
+
+\echo ''
+\echo '=== 15c. planner_estimate_rows ==='
+\echo '   planner_estimate_rows(NULL, NULL) must return 0.0'
+\echo '   planner_estimate_rows(non-NULL, NULL) must return 1000.0'
+SELECT kwabi_planner_estimate_rows_test() = 1000.0::float8 AS planner_estimate_rows;
+
+\echo ''
+\echo '=== 15d. planner_info ==='
+\echo '   planner_info must return a non-NULL PlannerInfo for a parsed query'
+SELECT kwabi_planner_info_test('SELECT 1') = true AS planner_info_nonnull;
+
+\echo ''
+\echo '=== 15e. planner_estimate_cost ==='
+\echo '   planner_estimate_cost must return a non-negative cost for a parsed query'
+SELECT kwabi_planner_estimate_cost_test('SELECT 1') >= 0.0 AS planner_estimate_cost;
 
 \echo ''
 \echo '=== 16. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='

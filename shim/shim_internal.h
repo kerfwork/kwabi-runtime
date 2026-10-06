@@ -53,6 +53,8 @@
 #include "lib/stringinfo.h"     /* StringInfo */
 #include "utils/lsyscache.h"     /* get_element_type, get_typlen, get_typtype, getBaseType */
 #include "utils/syscache.h"      /* SearchSysCache1, SysCacheGetAttr, ReleaseSysCache */
+#include "optimizer/planner.h"   /* standard_planner */
+#include "optimizer/cost.h"       /* cost_qual_eval */
 #include "catalog/pg_type.h"     /* TYPTYPE_COMPOSITE, TYPEOID */
 #include "catalog/pg_operator.h" /* OPEROID, Anum_pg_operator_oprleft, etc. */
 #include "catalog/pg_extension.h" /* Anum_pg_extension_extversion */
