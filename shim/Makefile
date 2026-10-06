@@ -107,7 +107,8 @@ CANARY := libcanary.$(DLSUFFIX)
 .PHONY: all build canary check install uninstall proof try panic-probe \
         guard-build guard-test guard-control capabilities cap-consumer fmgr mem-api \
         spi-api type-api guc-api defrem-api parser-api subxact-probe \
-        relation-api node-tree-api errsize \
+        relation-api buffer-lock-api lock-api node-tree-api errsize stringinfo-api shmem-api syscache-api \
+        extension-api \
         build-once ci clean info cluster-start cluster-stop cluster-status
 
 all: build
@@ -123,10 +124,12 @@ info:
 # macOS: the object carries undefined symbols, resolved by the postgres
 # process at load time. -bundle_loader would work but would bind the runtime
 # to one specific postgres binary, defeating the build-once property.
+SHIM_SRCS := $(wildcard *.c)
+
 build: $(RELEASE)/libkwabi_runtime.a
 	cc $(SHLIB_FLAGS) -fPIC -Wall -Wextra \
 	   $(PG_CFLAGS) -I$(RUNTIME_DIR) \
-	   -o $(BUNDLE) kwabi_runtime_shim.c \
+	   -o $(BUNDLE) $(SHIM_SRCS) \
 	   $(RUST_LINK_A)
 	@echo "built $(BUNDLE) for PostgreSQL $(PG)"
 
@@ -298,11 +301,47 @@ relation-api: check install
 	  -v bundle='$(BUNDLE)' \
 	  -f relation-api.sql postgres
 
+# The buffer manager and lock group: read buffers, manage pages, locks.
+buffer-lock-api: check install
+	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' \
+	  -f buffer-lock-api.sql postgres
+
+# The lock group: acquire, release, and check LWLocks and spinlocks.
+lock-api: check install
+	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' \
+	  -f lock-api.sql postgres
+
 # The node tree group: parse, inspect node types, query fields.
 node-tree-api: check install
 	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
 	  -v bundle='$(BUNDLE)' \
 	  -f node-tree-api.sql postgres
+
+# The stringinfo group: create, append, read, reset.
+stringinfo-api: check install
+	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' \
+	  -f stringinfo-api.sql postgres
+
+# The shmem group: allocate, write, read, free shared memory.
+shmem-api: check install
+	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' \
+	  -f shmem-api.sql postgres
+
+# The syscache group: look up system catalog entries.
+syscache-api: check install
+	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' \
+	  -f syscache-api.sql postgres
+
+# The extension group: look up extension metadata.
+extension-api: check install
+	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' \
+	  -f extension-api.sql postgres
 
 # The two-way control for fmgr-api check 13: builds a bundle with the
 # subtransaction removed and requires the partial write to SURVIVE there.

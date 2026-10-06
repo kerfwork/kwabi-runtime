@@ -1,0 +1,315 @@
+/* group_node.c — node tree slots for the kwabi shim */
+
+#include "shim_internal.h"
+
+/* ---- shim-provided node tree slots ----------------------------------- */
+
+static KwabiNodeType
+shim_node_type(KwabiNode node)
+{
+    if (node == NULL)
+        return KWABI_NODE_UNKNOWN;
+    switch (nodeTag((Node *) node)) {
+        case T_Query: return KWABI_NODE_QUERY;
+        case T_PlannedStmt: return KWABI_NODE_PLANNED_STMT;
+        case T_TargetEntry: return KWABI_NODE_TARGET_ENTRY;
+        case T_RangeTblEntry: return KWABI_NODE_RTE;
+        case T_SortGroupClause: return KWABI_NODE_SORT_GROUP_CLAUSE;
+        case T_Aggref: return KWABI_NODE_AGGREF;
+        case T_WindowFunc: return KWABI_NODE_WINDOW_FUNC;
+        case T_Var: return KWABI_NODE_VAR;
+        case T_Const: return KWABI_NODE_CONST;
+        case T_Param: return KWABI_NODE_PARAM;
+        case T_OpExpr: return KWABI_NODE_OP_EXPR;
+        case T_FuncExpr: return KWABI_NODE_FUNC_EXPR;
+        case T_DistinctExpr: return KWABI_NODE_DISTINCT_EXPR;
+        case T_NullIfExpr: return KWABI_NODE_NULLIF_EXPR;
+        case T_ScalarArrayOpExpr: return KWABI_NODE_SCALAR_ARRAY_OP_EXPR;
+        case T_BoolExpr: return KWABI_NODE_BOOL_EXPR;
+        case T_SubLink: return KWABI_NODE_SUB_LINK;
+        case T_SubPlan: return KWABI_NODE_SUB_PLAN;
+        case T_AlternativeSubPlan: return KWABI_NODE_ALTERNATIVE_SUB_PLAN;
+        case T_FieldSelect: return KWABI_NODE_FIELD_SELECT;
+        case T_FieldStore: return KWABI_NODE_FIELD_STORE;
+        case T_RelabelType: return KWABI_NODE_RELABEL_TYPE;
+        case T_CoerceViaIO: return KWABI_NODE_COERCE_VIA_IO;
+        case T_ArrayCoerceExpr: return KWABI_NODE_ARRAY_COERCE_EXPR;
+        case T_RowCompareExpr: return KWABI_NODE_ROW_COMPARE_EXPR;
+        case T_CoalesceExpr: return KWABI_NODE_COALESCE_EXPR;
+        case T_MinMaxExpr: return KWABI_NODE_MIN_MAX_EXPR;
+        case T_SQLValueFunction: return KWABI_NODE_SQLVALUE_FUNCTION;
+        case T_XmlExpr: return KWABI_NODE_XML_EXPR;
+        case T_NullTest: return KWABI_NODE_NULL_TEST;
+        case T_BooleanTest: return KWABI_NODE_BOOLEAN_TEST;
+        case T_CurrentOfExpr: return KWABI_NODE_CURRENT_OF_EXPR;
+        case T_NextValueExpr: return KWABI_NODE_NEXT_VALUE_EXPR;
+        case T_InferenceElem: return KWABI_NODE_INFERENCE_ELEM;
+        case T_JoinExpr: return KWABI_NODE_JOIN_EXPR;
+        case T_FromExpr: return KWABI_NODE_FROM_EXPR;
+        case T_OnConflictExpr: return KWABI_NODE_ON_CONFLICT_EXPR;
+        case T_TypeName: return KWABI_NODE_TYPE_NAME;
+        default: return KWABI_NODE_UNKNOWN;
+    }
+}
+
+static const char *
+shim_node_type_name(KwabiNode node)
+{
+    if (node == NULL)
+        return "unknown";
+    switch (nodeTag((Node *) node)) {
+        case T_Query: return "Query";
+        case T_PlannedStmt: return "PlannedStmt";
+        case T_SelectStmt: return "SelectStmt";
+        case T_InsertStmt: return "InsertStmt";
+        case T_UpdateStmt: return "UpdateStmt";
+        case T_DeleteStmt: return "DeleteStmt";
+        case T_TargetEntry: return "TargetEntry";
+        case T_RangeTblEntry: return "RangeTblEntry";
+        case T_SortGroupClause: return "SortGroupClause";
+        case T_Aggref: return "Aggref";
+        case T_WindowFunc: return "WindowFunc";
+        case T_Var: return "Var";
+        case T_Const: return "Const";
+        case T_Param: return "Param";
+        case T_OpExpr: return "OpExpr";
+        case T_FuncExpr: return "FuncExpr";
+        case T_DistinctExpr: return "DistinctExpr";
+        case T_NullIfExpr: return "NullIfExpr";
+        case T_ScalarArrayOpExpr: return "ScalarArrayOpExpr";
+        case T_BoolExpr: return "BoolExpr";
+        case T_SubLink: return "SubLink";
+        case T_SubPlan: return "SubPlan";
+        case T_AlternativeSubPlan: return "AlternativeSubPlan";
+        case T_FieldSelect: return "FieldSelect";
+        case T_FieldStore: return "FieldStore";
+        case T_RelabelType: return "RelabelType";
+        case T_CoerceViaIO: return "CoerceViaIO";
+        case T_ArrayCoerceExpr: return "ArrayCoerceExpr";
+        case T_RowCompareExpr: return "RowCompareExpr";
+        case T_CoalesceExpr: return "CoalesceExpr";
+        case T_MinMaxExpr: return "MinMaxExpr";
+        case T_SQLValueFunction: return "SQLValueFunction";
+        case T_XmlExpr: return "XmlExpr";
+        case T_NullTest: return "NullTest";
+        case T_BooleanTest: return "BooleanTest";
+        case T_CurrentOfExpr: return "CurrentOfExpr";
+        case T_NextValueExpr: return "NextValueExpr";
+        case T_InferenceElem: return "InferenceElem";
+        case T_JoinExpr: return "JoinExpr";
+        case T_FromExpr: return "FromExpr";
+        case T_OnConflictExpr: return "OnConflictExpr";
+        case T_TypeName: return "TypeName";
+        default: return "unknown";
+    }
+}
+
+static KwabiList
+shim_node_get_list(KwabiNode node)
+{
+    if (node == NULL)
+        return NULL;
+    /* For a Query node, return its target list. */
+    if (nodeTag((Node *) node) == T_Query)
+        return (KwabiList) ((Query *) node)->targetList;
+    return NULL;
+}
+
+static int
+shim_node_list_length(KwabiNode node)
+{
+    if (node == NULL)
+        return 0;
+    if (nodeTag((Node *) node) == T_Query)
+        return list_length((List *) ((Query *) node)->targetList);
+    /* Already a List (e.g. from query_rtable) */
+    return list_length((List *) node);
+}
+
+static KwabiNode
+shim_node_list_get(KwabiNode node, int index)
+{
+    if (node == NULL || index < 0)
+        return NULL;
+    if (nodeTag((Node *) node) == T_Query)
+        return (KwabiNode) list_nth((List *) ((Query *) node)->targetList, index);
+    /* Already a List (e.g. from query_rtable) */
+    return (KwabiNode) list_nth((List *) node, index);
+}
+
+static KwabiCmdType
+shim_query_command_type(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return KWABI_CMD_UNKNOWN;
+    switch (((Query *) query)->commandType) {
+        case CMD_SELECT: return KWABI_CMD_SELECT;
+        case CMD_UPDATE: return KWABI_CMD_UPDATE;
+        case CMD_INSERT: return KWABI_CMD_INSERT;
+        case CMD_DELETE: return KWABI_CMD_DELETE;
+        case CMD_UTILITY: return KWABI_CMD_UTILITY;
+        case CMD_NOTHING: return KWABI_CMD_NOTHING;
+        default: return KWABI_CMD_UNKNOWN;
+    }
+}
+
+static KwabiList
+shim_query_rtable(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->rtable;
+}
+
+static KwabiList
+shim_query_target_list(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->targetList;
+}
+
+static KwabiList
+shim_query_returning_list(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->returningList;
+}
+
+static KwabiNode
+shim_query_jointree(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiNode) ((Query *) query)->jointree;
+}
+
+static KwabiList
+shim_query_group_clause(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->groupClause;
+}
+
+static KwabiList
+shim_query_sort_clause(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiList) ((Query *) query)->sortClause;
+}
+
+static KwabiNode
+shim_query_limit_offset(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiNode) ((Query *) query)->limitOffset;
+}
+
+static KwabiNode
+shim_query_limit_count(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return NULL;
+    return (KwabiNode) ((Query *) query)->limitCount;
+}
+
+static bool
+shim_query_has_for_update(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return false;
+    return ((Query *) query)->rowMarks != NIL;
+}
+
+static bool
+shim_query_has_row_security(KwabiNode query)
+{
+    if (query == NULL || nodeTag((Node *) query) != T_Query)
+        return false;
+    return ((Query *) query)->hasRowSecurity;
+}
+
+static KwabiPlan
+shim_planned_stmt_plan_tree(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return NULL;
+    return (KwabiPlan) ((PlannedStmt *) stmt)->planTree;
+}
+
+static KwabiList
+shim_planned_stmt_rtable(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return NULL;
+    return (KwabiList) ((PlannedStmt *) stmt)->rtable;
+}
+
+static KwabiList
+shim_planned_stmt_result_relations(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return NULL;
+    return (KwabiList) ((PlannedStmt *) stmt)->resultRelations;
+}
+
+static bool
+shim_planned_stmt_has_returning(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return false;
+    return ((PlannedStmt *) stmt)->hasReturning;
+}
+
+static bool
+shim_planned_stmt_has_modifying_cte(KwabiNode stmt)
+{
+    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
+        return false;
+    return ((PlannedStmt *) stmt)->hasModifyingCTE;
+}
+
+static bool
+shim_planned_stmt_is_utility(KwabiNode stmt)
+{
+    if (stmt == NULL)
+        return false;
+    if (nodeTag((Node *) stmt) == T_Query)
+        return ((Query *) stmt)->commandType == CMD_UTILITY;
+    if (nodeTag((Node *) stmt) == T_PlannedStmt)
+        return ((PlannedStmt *) stmt)->utilityStmt != NULL;
+    return false;
+}
+
+
+
+void
+init_group_node(void)
+{
+    shim_table.node_type = shim_node_type;
+    shim_table.node_type_name = shim_node_type_name;
+    shim_table.node_get_list = shim_node_get_list;
+    shim_table.node_list_length = shim_node_list_length;
+    shim_table.node_list_get = shim_node_list_get;
+    shim_table.query_command_type = shim_query_command_type;
+    shim_table.query_rtable = shim_query_rtable;
+    shim_table.query_target_list = shim_query_target_list;
+    shim_table.query_returning_list = shim_query_returning_list;
+    shim_table.query_jointree = shim_query_jointree;
+    shim_table.query_group_clause = shim_query_group_clause;
+    shim_table.query_sort_clause = shim_query_sort_clause;
+    shim_table.query_limit_offset = shim_query_limit_offset;
+    shim_table.query_limit_count = shim_query_limit_count;
+    shim_table.query_has_for_update = shim_query_has_for_update;
+    shim_table.query_has_row_security = shim_query_has_row_security;
+    shim_table.planned_stmt_plan_tree = shim_planned_stmt_plan_tree;
+    shim_table.planned_stmt_rtable = shim_planned_stmt_rtable;
+    shim_table.planned_stmt_result_relations = shim_planned_stmt_result_relations;
+    shim_table.planned_stmt_has_returning = shim_planned_stmt_has_returning;
+    shim_table.planned_stmt_has_modifying_cte = shim_planned_stmt_has_modifying_cte;
+    shim_table.planned_stmt_is_utility = shim_planned_stmt_is_utility;
+}

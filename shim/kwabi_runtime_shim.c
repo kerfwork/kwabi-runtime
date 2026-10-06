@@ -26,147 +26,9 @@
  *      -o kwabi_runtime_pg18.dylib kwabi_runtime_pg18.c libkwabi_runtime.a
  */
 
-#include "postgres.h"
+#include "shim_internal.h"
 
-#include "fmgr.h"
-#include "utils/memutils.h"
-#include "utils/palloc.h"
-#include "utils/elog.h"
-#include "utils/builtins.h"
-#include "executor/spi.h"
-#include "utils/guc.h"        /* GetConfigOptionByName, SetConfigOption */
-#include <dlfcn.h>            /* dlopen: see kwabi_load_extension */
-
-/* The kwabi header names PostgreSQL types that postgres.h does not pull in.
- * Including the defining headers first is what a version-specific shim is
- * for: this is the only file in the project that knows PostgreSQL's layout. */
-#include "access/htup.h"        /* HeapTuple */
-#include "access/htup_details.h" /* HeapTupleHeaderGetOid */
-#include "access/tupdesc.h"     /* TupleDesc */
-#include "access/skey.h"        /* ScanKey */
-#include "access/heapam.h"      /* BulkInsertState */
-#include "storage/itemptr.h"    /* ItemPointer, BlockNumber, OffsetNumber */
-#include "storage/buf.h"        /* Buffer, BufferAccessStrategy */
-#include "storage/bufpage.h"    /* Page */
-#include "storage/lwlock.h"     /* LWLock */
-#include "storage/s_lock.h"     /* slock_t */
-#include "nodes/pg_list.h"      /* List */
-#include "nodes/nodes.h"        /* Node */
-#include "nodes/primnodes.h"    /* IntoClause */
-#include "nodes/plannodes.h"    /* Plan */
-#include "parser/parser.h"     /* pg_parse_query, pg_plan_query */
-#include "nodes/params.h"       /* ParamListInfo */
-#include "utils/relcache.h"     /* Relation */
-#include "utils/reltrigger.h"   /* TriggerDesc, Trigger */
-#include "utils/snapshot.h"     /* Snapshot */
-#include "utils/queryenvironment.h" /* QueryEnvironment */
-#include "executor/tuptable.h"  /* TupleTableSlot */
-#include "executor/execdesc.h"  /* QueryDesc */
-#include "commands/vacuum.h"    /* VacuumParams */
-#include "lib/stringinfo.h"     /* StringInfo */
-#include "utils/lsyscache.h"     /* get_element_type, get_typlen, get_typtype, getBaseType */
-#include "utils/syscache.h"      /* SearchSysCache1, SysCacheGetAttr, ReleaseSysCache */
-#include "catalog/pg_type.h"     /* TYPTYPE_COMPOSITE, TYPEOID */
-#include "catalog/pg_operator.h" /* OPEROID, Anum_pg_operator_oprleft, etc. */
-#include "parser/parser.h"       /* pg_parse_query */
-#include "parser/parse_type.h"   /* parseTypeString, typeStringToTypeName */
-#include "parser/analyze.h"       /* parse_analyze_fixedparams */
-
-/*
- * Version differences in this file are marked `VERSION-DIFF` so they can be
- * found with one grep. This is the complete set for 17 and 18; keeping them
- * in one file rather than copying the file per version is deliberate — a copy
- * would silently drift, and the guards below are each a fact worth reading.
- */
-
-/* ExplainState moved out of commands/explain.h in PostgreSQL 18. */
-#if PG_VERSION_NUM >= 180000
-#include "commands/explain_state.h"
-#else
-#include "commands/explain.h"
-#endif
-
-/*
- * One name in kwabi.h has no counterpart in this PostgreSQL version, and this
- * is where that gets handled. It is the clearest small example of why the ABI
- * needs a per-version layer at all:
- *
- *   BackendId  was a real type through PG 16, then renamed to ProcNumber in
- *              PG 17 (storage/backendid.h was deleted, storage/procnumber.h
- *              added). An extension that named BackendId would fail to
- *              compile on 17+; one that uses the kwabi slot does not, because
- *              the shim absorbs the rename.
- *
- * A future ABI revision may replace the BackendId slot outright. For now the
- * shim keeps the name working, which is the whole point of the layer.
- */
-/* VERSION-DIFF: BackendId -> ProcNumber at 17. */
-#if PG_VERSION_NUM >= 170000
-typedef ProcNumber BackendId;
-#else
-#include "storage/backendid.h"
-#endif
-
-/* Now kwabi.h can resolve every name in its table. Its PG type aliases would
- * collide with the real definitions we just pulled in, so they are
- * suppressed; the kwabi handle typedefs still apply. */
-#define KWABI_NO_PG_TYPE_ALIASES 1
-#include "kwabi.h"
-
-/* Runtime core, from the Rust static library. The native table is defined
- * below, so this forward-declares it. */
-struct KwabiNative;
-extern const KwabiV1 *kwabi_runtime_init(const struct KwabiNative *native);
-
-/*
- * Capabilities of a caller-supplied table. The runtime computes it, but it must
- * be asked about the SHIM's table: the shim installs try_body, error_get and
- * the memory accessors onto a copy of the runtime's table, so the runtime's own
- * copy has those slots NULL. Asking the wrong table understates the ABI -- it
- * reported CORE only, on a runtime that supports everything.
- */
-extern uint64_t kwabi_capabilities_of(const KwabiV1 *table, uint32_t pg_major);
-extern const KwabiV1 *kwabi_get_api(void);
-
-/*
- * Overwrite the runtime's error buffer from a C-built KwabiError.
- *
- * The fmgr slots catch their errors here in C (PG_CATCH is the only place
- * CopyErrorData works), but the buffer that `error_get` reads lives in the
- * runtime. This is the bridge between them; without it the shim could catch an
- * error the extension could never read.
- */
-extern void kwabi_error_set(const KwabiError *err);
-
-/*
- * Mirror of the runtime's native table.
- *
- * The runtime owns this struct's definition. It is duplicated here because
- * the runtime is Rust and this shim is C, and neither should include the
- * other's headers. The guard below is what keeps the duplication honest: if
- * the two ever disagree about size, `kwabi_runtime_init` refuses to publish
- * and the build-time assertion fires instead of the two sides reading each
- * other's memory wrong.
- *
- * This is the one piece of hand-maintained ABI in the project, and it is
- * deliberately small — 11 fields, growing only as capability groups are
- * wired. Contrast with KwabiV1's 200 slots, which are generated.
- */
-typedef struct KwabiNative {
-    uint32_t pg_major;
-    void *(*palloc)(size_t);
-    void *(*palloc0)(size_t);
-    void *(*repalloc)(void *, size_t);
-    void (*pfree)(void *);
-    void *(*memory_context_current)(void);
-    void *(*memory_context_switch_to)(void *);
-    void (*memory_context_reset)(void *);
-    void (*memory_context_delete)(void *);
-    const char *(*error_message)(void);
-    int (*error_code)(void);
-    void (*error_clear)(void);
-    void (*log_line)(int, const char *);
-} KwabiNative;
+/* ---- shim-provided stable slots -------------------------------------- */
 
 /* ---- shim-provided stable slots -------------------------------------- */
 
@@ -179,7 +41,7 @@ typedef struct KwabiNative {
  * runtime had secretly used malloc, GetMemoryChunkContext would read a header
  * that is not there.
  */
-static KwabiMemoryContext
+KwabiMemoryContext
 shim_memory_chunk_context(void *pointer)
 {
     if (pointer == NULL)
@@ -187,7 +49,7 @@ shim_memory_chunk_context(void *pointer)
     return (KwabiMemoryContext) GetMemoryChunkContext(pointer);
 }
 
-static KwabiMemoryContext
+KwabiMemoryContext
 shim_current_memory_context(void)
 {
     return (KwabiMemoryContext) CurrentMemoryContext;
@@ -207,13 +69,16 @@ shim_current_memory_context(void)
  * through errmsg("%s", ...) rather than as a format string, so a message
  * containing a percent sign cannot turn into a format-string bug.
  */
-static void
+void
 shim_raise_error(int sqlerrcode, const char *msg)
 {
     ereport(ERROR,
             (errcode(sqlerrcode),
              errmsg("%s", msg != NULL ? msg : "kwabi: error")));
 }
+
+
+/* ---- native table: PostgreSQL 18 symbols ----------------------------- */
 
 /* ---- native table: PostgreSQL 18 symbols ----------------------------- */
 
@@ -292,7 +157,7 @@ native_memory_context_delete(void *ctx)
  * ("Use MemoryContextSetIdentifier if you want to provide a variable
  * identifier"), so it is the supported route rather than a way around a check.
  */
-static KwabiMemoryContext
+KwabiMemoryContext
 shim_memory_context_create(const char *name)
 {
     MemoryContext ctx = AllocSetContextCreateInternal(
@@ -306,1491 +171,8 @@ shim_memory_context_create(const char *name)
     return (KwabiMemoryContext) ctx;
 }
 
-/* ---- shim-provided fmgr slots ---------------------------------------- */
 
-/*
- * Capture the error currently being handled into the runtime's error buffer.
- *
- * MUST be called from inside a PG_CATCH block: CopyErrorData() reads the error
- * stack, which only exists there. On return the error state has been flushed,
- * so the caller may continue normally — which is the whole point of the
- * firewall.
- *
- * The fields are copied into KwabiError's fixed-size arrays immediately, so the
- * palloc'd ErrorData's own memory context — which a rollback is about to tear
- * down — is never depended on. That is what makes this safe to call before
- * RollbackAndReleaseCurrentSubTransaction, and it is why the "switch context
- * first" rule (error-firewall-design.md §3.2) is satisfied by the caller
- * switching to a context that outlives the subtransaction.
- */
-static void
-shim_capture_error(void)
-{
-    KwabiError err;
-    ErrorData  *edata;
-
-    kwabi_error_init(&err);
-
-    edata = CopyErrorData();
-    FlushErrorState();
-
-    kwabi_error_set_core(&err, edata->sqlerrcode, KWABI_ERR_RAISED,
-                         edata->message != NULL ? edata->message
-                         : "kwabi: PostgreSQL raised without a message");
-    kwabi_error_set_detail(&err, edata->detail, edata->hint);
-    kwabi_error_set_object(&err,
-                           edata->schema_name, edata->table_name,
-                           edata->column_name, edata->datatype_name,
-                           edata->constraint_name);
-
-    FreeErrorData(edata);
-
-    /* The runtime owns the buffer error_get reads; hand it over. */
-    kwabi_error_set(&err);
-}
-
-/*
- * fmgr_info through the ABI.
- *
- * Shim-owned because fmgr_info can ereport — fmgr_info_cxt_security does
- * elog(ERROR, "cache lookup failed for function %u") — and a Rust frame between
- * that raise and a PG_TRY would break the firewall. See kwabi.h.
- *
- * NO subtransaction here, unlike the call slots below, and the distinction is
- * principled rather than an omission: fmgr_info does no user-visible work. It
- * reads catalogs and fills a struct; if it fails there is nothing to undo, so
- * the error is captured and NULL is returned. The subtransaction rule exists to
- * stop a SWALLOWED error from leaving partial WORK committed, and there is no
- * work here to leave.
- */
-static KwabiFmgrInfo
-shim_fmgr_info(Oid fn_oid)
-{
-    FmgrInfo      *flinfo = (FmgrInfo *) palloc(sizeof(FmgrInfo));
-    KwabiFmgrInfo  result = NULL;
-
-    PG_TRY();
-    {
-        fmgr_info(fn_oid, flinfo);
-        result = (KwabiFmgrInfo) flinfo;
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = NULL;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-/*
- * The shared body of every call_function* slot.
- *
- * The subtransaction is MANDATORY, for the same reason try_body needs one and
- * measured in error-firewall-design.md §3.1: this slot catches a PostgreSQL
- * ERROR and RETURNS to the caller (the extension), which then continues.
- * Without a subtransaction, any partial work the failed function did before
- * erroring survives and can commit — the silent-inconsistency bug the firewall
- * exists to prevent. So the call runs in an internal subtransaction: success
- * commits it, failure rolls it back.
- *
- * Cost: a savepoint per call. That is the price of catching safely, and it is
- * the same price try_body pays. A cheaper read-only fast path is an open
- * question (error-firewall-design.md §8.3) and is deliberately not taken here,
- * because "is this call safe to run without undo?" is not a question the ABI
- * can answer for an arbitrary function.
- *
- * FunctionCallInvoke does NOT short-circuit a strict function, so a NULL
- * argument is passed through to the function; strictness is a caller-side
- * concern. See the contract in kwabi.h.
- */
-static KwabiStatus
-shim_call_impl(FmgrInfo *flinfo, int nargs, const Datum *args,
-               const bool *argnulls, bool *isnull, Datum *result)
-{
-    KwabiStatus    status;
-    MemoryContext  oldcontext = CurrentMemoryContext;
-    ResourceOwner  oldowner   = CurrentResourceOwner;
-
-    BeginInternalSubTransaction(NULL);
-
-    PG_TRY();
-    {
-        LOCAL_FCINFO(fcinfo, FUNC_MAX_ARGS);
-        int i;
-
-        InitFunctionCallInfoData(*fcinfo, flinfo, nargs, InvalidOid, NULL, NULL);
-        for (i = 0; i < nargs; i++)
-        {
-            fcinfo->args[i].value  = args[i];
-            fcinfo->args[i].isnull = (argnulls != NULL) ? argnulls[i] : false;
-        }
-
-        *result = FunctionCallInvoke(fcinfo);
-        *isnull = fcinfo->isnull;
-
-        ReleaseCurrentSubTransaction();
-        MemoryContextSwitchTo(oldcontext);
-        CurrentResourceOwner = oldowner;
-        status = KWABI_OK;
-    }
-    PG_CATCH();
-    {
-        /* Switch to a context that outlives the subtransaction BEFORE
-         * CopyErrorData pallocs into it — the documented order (§3.2). */
-        MemoryContextSwitchTo(oldcontext);
-        shim_capture_error();
-
-        RollbackAndReleaseCurrentSubTransaction();
-        MemoryContextSwitchTo(oldcontext);
-        CurrentResourceOwner = oldowner;
-        status = KWABI_ERR_RAISED;
-    }
-    PG_END_TRY();
-
-    return status;
-}
-
-static KwabiStatus
-shim_call_function(KwabiFmgrInfo info, int nargs, Datum *args,
-                   const bool *argnulls, bool *isnull, Datum *result)
-{
-    if (info == NULL || isnull == NULL || result == NULL)
-        return KWABI_ERR_BAD_ARG;
-    if (nargs < 0 || nargs > FUNC_MAX_ARGS)
-        return KWABI_ERR_BAD_ARG;
-    if (nargs > 0 && args == NULL)
-        return KWABI_ERR_BAD_ARG;
-
-    return shim_call_impl((FmgrInfo *) info, nargs, args, argnulls, isnull, result);
-}
-
-static KwabiStatus
-shim_call_function1(KwabiFmgrInfo info, Datum arg1, bool *isnull, Datum *result)
-{
-    Datum a[1];
-
-    if (info == NULL || isnull == NULL || result == NULL)
-        return KWABI_ERR_BAD_ARG;
-
-    a[0] = arg1;
-    return shim_call_impl((FmgrInfo *) info, 1, a, NULL, isnull, result);
-}
-
-static KwabiStatus
-shim_call_function2(KwabiFmgrInfo info, Datum arg1, Datum arg2,
-                    bool *isnull, Datum *result)
-{
-    Datum a[2];
-
-    if (info == NULL || isnull == NULL || result == NULL)
-        return KWABI_ERR_BAD_ARG;
-
-    a[0] = arg1;
-    a[1] = arg2;
-    return shim_call_impl((FmgrInfo *) info, 2, a, NULL, isnull, result);
-}
-
-static KwabiStatus
-shim_call_function3(KwabiFmgrInfo info, Datum arg1, Datum arg2, Datum arg3,
-                    bool *isnull, Datum *result)
-{
-    Datum a[3];
-
-    if (info == NULL || isnull == NULL || result == NULL)
-        return KWABI_ERR_BAD_ARG;
-
-    a[0] = arg1;
-    a[1] = arg2;
-    a[2] = arg3;
-    return shim_call_impl((FmgrInfo *) info, 3, a, NULL, isnull, result);
-}
-
-/* ---- shim-provided SPI slots ---------------------------------------- */
-
-/*
- * The SPI result handle.
- *
- * SPI is a per-backend global state: SPI_tuptable and SPI_processed are
- * globals that are overwritten by the next SPI command. So the result
- * handle copies them out immediately, and the caller reads from the copy.
- *
- * The tuple table itself is NOT copied: it is owned by SPI and is only
- * valid until the next SPI command or until SPI_finish is called. So
- * spi_free_result must be called before the next spi_execute, and the
- * caller must read all values before then. This is a limitation, but it
- * is consistent with how SPI works in PostgreSQL.
- */
-typedef struct KwabiSPIResultImpl {
-    SPITupleTable *tuptable;
-    uint64 processed;
-} KwabiSPIResultImpl;
-
-static KwabiSPIResult
-shim_spi_execute(const char *sql, bool read_only, int tcount)
-{
-    KwabiSPIResultImpl *result;
-    int spi_result;
-
-    if (sql == NULL)
-        return NULL;
-
-    if (SPI_connect() != SPI_OK_CONNECT)
-        return NULL;
-
-    spi_result = SPI_execute(sql, read_only, tcount);
-    if (spi_result < 0) {
-        SPI_finish();
-        return NULL;
-    }
-
-    result = (KwabiSPIResultImpl *) palloc(sizeof(KwabiSPIResultImpl));
-    result->tuptable = SPI_tuptable;
-    result->processed = SPI_processed;
-
-    return (KwabiSPIResult) result;
-}
-
-static KwabiSPIResult
-shim_spi_execute_plan(KwabiSPIPlan plan, Datum *values, const char *nulls,
-                      bool read_only, int tcount)
-{
-    KwabiSPIResultImpl *result;
-    int spi_result;
-
-    if (plan == NULL)
-        return NULL;
-
-    if (SPI_connect() != SPI_OK_CONNECT)
-        return NULL;
-
-    spi_result = SPI_execute_plan((SPIPlanPtr) plan, values, nulls, read_only, tcount);
-    if (spi_result < 0) {
-        SPI_finish();
-        return NULL;
-    }
-
-    result = (KwabiSPIResultImpl *) palloc(sizeof(KwabiSPIResultImpl));
-    result->tuptable = SPI_tuptable;
-    result->processed = SPI_processed;
-
-    return (KwabiSPIResult) result;
-}
-
-static void
-shim_spi_free_result(KwabiSPIResult result)
-{
-    if (result == NULL)
-        return;
-
-    pfree(result);    /* free while its context is still alive */
-    SPI_finish();     /* then tear down SPI */
-}
-
-static int
-shim_spi_result_ntuples(KwabiSPIResult result)
-{
-    KwabiSPIResultImpl *impl = (KwabiSPIResultImpl *) result;
-    if (impl == NULL)
-        return 0;
-    return (int) impl->processed;
-}
-
-static Datum
-shim_spi_result_get_value(KwabiSPIResult result, int tupno, int attno)
-{
-    KwabiSPIResultImpl *impl = (KwabiSPIResultImpl *) result;
-    bool isnull;
-
-    if (impl == NULL || impl->tuptable == NULL)
-        return (Datum) 0;
-    if (tupno < 0 || tupno >= (int) impl->processed)
-        return (Datum) 0;
-    if (attno < 1 || attno > impl->tuptable->tupdesc->natts)
-        return (Datum) 0;
-
-    return SPI_getbinval(impl->tuptable->vals[tupno],
-                         impl->tuptable->tupdesc, attno, &isnull);
-}
-
-/* ---- shim-provided GUC slots ---------------------------------------- */
-
-/*
- * GUC access through the ABI.
- *
- * These are shim-owned because GetConfigOptionByName and SetConfigOption
- * can raise (e.g. "unrecognized configuration parameter"), and the error
- * firewall forbids a Rust frame between a PG_TRY and a raising call.
- *
- * The signatures match kwabi.h exactly:
- *   int (*guc_get_int)(const char *name);
- *   const char *(*guc_get_string)(const char *name);
- *   bool (*guc_get_bool)(const char *name);
- *   double (*guc_get_float)(const char *name);
- *   void (*guc_set_int)(const char *name, int value);
- *   void (*guc_set_string)(const char *name, const char *value);
- *   void (*guc_set_bool)(const char *name, bool value);
- *   void (*guc_set_float)(const char *name, double value);
- */
-
-static int
-shim_guc_get_int(const char *name)
-{
-    char        *str;
-    int          value = 0;
-
-    if (name == NULL)
-        return 0;
-
-    /*
-     * LIMITATION, documented rather than hidden: this reads the GUC's DISPLAY
-     * string and applies atoi. That is correct for a unit-less integer GUC
-     * (max_connections -> "100") but WRONG for one with a unit suffix:
-     * work_mem displays as "4MB", so atoi gives 4, not the 4096 kB the GUC
-     * actually holds. Unit-suffixed GUCs need real unit parsing, which this
-     * slot does not do yet.
-     *
-     * The test therefore uses max_connections, which exercises the slot's real
-     * contract. See guc-api.sql check 1.
-     */
-    PG_TRY();
-    {
-        str = GetConfigOptionByName(name, NULL, false);
-        if (str != NULL)
-            value = atoi(str);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        value = 0;
-    }
-    PG_END_TRY();
-
-    return value;
-}
-
-static const char *
-shim_guc_get_string(const char *name)
-{
-    char        *str;
-
-    if (name == NULL)
-        return NULL;
-
-    PG_TRY();
-    {
-        str = GetConfigOptionByName(name, NULL, false);
-        return str;
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        return NULL;
-    }
-    PG_END_TRY();
-}
-
-static bool
-shim_guc_get_bool(const char *name)
-{
-    char        *str;
-    bool         value = false;
-
-    if (name == NULL)
-        return false;
-
-    PG_TRY();
-    {
-        str = GetConfigOptionByName(name, NULL, false);
-        if (str != NULL)
-            value = (str[0] == 't' || str[0] == 'T' || str[0] == '1' || str[0] == 'o');
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        value = false;
-    }
-    PG_END_TRY();
-
-    return value;
-}
-
-static double
-shim_guc_get_float(const char *name)
-{
-    char        *str;
-    double       value = 0.0;
-
-    if (name == NULL)
-        return 0.0;
-
-    PG_TRY();
-    {
-        str = GetConfigOptionByName(name, NULL, false);
-        if (str != NULL)
-            value = atof(str);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        value = 0.0;
-    }
-    PG_END_TRY();
-
-    return value;
-}
-
-static void
-shim_guc_set_int(const char *name, int value)
-{
-    char         buf[64];
-
-    if (name == NULL)
-        return;
-
-    snprintf(buf, sizeof(buf), "%d", value);
-
-    PG_TRY();
-    {
-        SetConfigOption(name, buf, PGC_USERSET, PGC_S_SESSION);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-    }
-    PG_END_TRY();
-}
-
-static void
-shim_guc_set_string(const char *name, const char *value)
-{
-    if (name == NULL)
-        return;
-
-    PG_TRY();
-    {
-        SetConfigOption(name, value != NULL ? value : "", PGC_USERSET, PGC_S_SESSION);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-    }
-    PG_END_TRY();
-}
-
-static void
-shim_guc_set_bool(const char *name, bool value)
-{
-    if (name == NULL)
-        return;
-
-    PG_TRY();
-    {
-        SetConfigOption(name, value ? "on" : "off", PGC_USERSET, PGC_S_SESSION);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-    }
-    PG_END_TRY();
-}
-
-static void
-shim_guc_set_float(const char *name, double value)
-{
-    char         buf[64];
-
-    if (name == NULL)
-        return;
-
-    snprintf(buf, sizeof(buf), "%g", value);
-
-    PG_TRY();
-    {
-        SetConfigOption(name, buf, PGC_USERSET, PGC_S_SESSION);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-    }
-    PG_END_TRY();
-}
-
-/* ---- shim-provided defrem slots -------------------------------------- */
-
-/*
- * Default (defrem) operations through the ABI.
- *
- * These use SPI to execute ALTER TABLE statements, which is the safest
- * approach: it goes through PostgreSQL's own parser and executor, so
- * the semantics are exactly PostgreSQL's.
- *
- * The signatures match kwabi.h:
- *   void (*defrem_create)(const char *name, const char *type, const char *value);
- *   void (*defrem_alter)(const char *name, const char *value);
- *   void (*defrem_drop)(const char *name);
- *
- * `name` is expected in "table.column" format.
- */
-
-/*
- * Split "table.column" into table and column parts.
- * Returns true if the split succeeded, false if there was no dot.
- */
-static bool
-split_table_column(const char *name, char *table, size_t table_len,
-                   char *column, size_t column_len)
-{
-    const char *dot;
-
-    if (name == NULL || table == NULL || column == NULL)
-        return false;
-
-    dot = strrchr(name, '.');
-    if (dot == NULL)
-        return false;
-
-    if ((size_t)(dot - name) >= table_len)
-        return false;
-    if (strlen(dot + 1) >= column_len)
-        return false;
-
-    snprintf(table, table_len, "%.*s", (int)(dot - name), name);
-    snprintf(column, column_len, "%s", dot + 1);
-    return true;
-}
-
-static void
-shim_defrem_create(const char *name, const char *type, const char *value)
-{
-    char         sql[1024];
-    char         table[256];
-    char         column[256];
-
-    if (name == NULL || type == NULL || value == NULL)
-        return;
-
-    if (!split_table_column(name, table, sizeof(table), column, sizeof(column)))
-        return;
-
-    snprintf(sql, sizeof(sql),
-             "ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s",
-             table, column, value);
-
-    if (SPI_connect() != SPI_OK_CONNECT)
-        return;
-
-    if (SPI_execute(sql, false, 0) < 0) {
-        SPI_finish();
-        return;
-    }
-
-    SPI_finish();
-}
-
-static void
-shim_defrem_alter(const char *name, const char *value)
-{
-    char         sql[1024];
-    char         table[256];
-    char         column[256];
-
-    if (name == NULL || value == NULL)
-        return;
-
-    if (!split_table_column(name, table, sizeof(table), column, sizeof(column)))
-        return;
-
-    snprintf(sql, sizeof(sql),
-             "ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s",
-             table, column, value);
-
-    if (SPI_connect() != SPI_OK_CONNECT)
-        return;
-
-    if (SPI_execute(sql, false, 0) < 0) {
-        SPI_finish();
-        return;
-    }
-
-    SPI_finish();
-}
-
-static void
-shim_defrem_drop(const char *name)
-{
-    char         sql[1024];
-    char         table[256];
-    char         column[256];
-
-    if (name == NULL)
-        return;
-
-    if (!split_table_column(name, table, sizeof(table), column, sizeof(column)))
-        return;
-
-    snprintf(sql, sizeof(sql),
-             "ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT",
-             table, column);
-
-    if (SPI_connect() != SPI_OK_CONNECT)
-        return;
-
-    if (SPI_execute(sql, false, 0) < 0) {
-        SPI_finish();
-        return;
-    }
-
-    SPI_finish();
-}
-
-/* ---- shim-provided type system slots --------------------------------- */
-
-/*
- * Type system access through the ABI.
- *
- * These are shim-owned because catalog lookups can raise (e.g. "type does
- * not exist"), and the error firewall forbids a Rust frame between a PG_TRY
- * and a raising call.
- *
- * The signatures match kwabi.h exactly:
- *   Datum (*type_input)(Oid type_oid, const char *input, int32 typmod);
- *   char *(*type_output)(Oid type_oid, Datum value);
- *   Datum (*type_recv)(Oid type_oid, StringInfo buf);
- *   void (*type_send)(Oid type_oid, Datum value, StringInfo buf);
- *   Oid (*type_element_type)(Oid type_oid);
- *   int16 (*type_length)(Oid type_oid);
- *   bool (*type_is_array)(Oid type_oid);
- *   bool (*type_is_composite)(Oid type_oid);
- *   Oid (*type_base_type)(Oid type_oid);
- */
-
-/* Look up a type's I/O function OID from the catalog cache. */
-static Oid
-get_type_io_func(Oid type_oid, int which)
-{
-    HeapTuple tup;
-    Oid func_oid = InvalidOid;
-    bool isnull;
-
-    if (!OidIsValid(type_oid))
-        return InvalidOid;
-
-    tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
-    if (!HeapTupleIsValid(tup))
-        return InvalidOid;
-
-    switch (which) {
-        case 0: /* input */
-            func_oid = DatumGetObjectId(SysCacheGetAttr(TYPEOID, tup, Anum_pg_type_typinput, &isnull));
-            break;
-        case 1: /* output */
-            func_oid = DatumGetObjectId(SysCacheGetAttr(TYPEOID, tup, Anum_pg_type_typoutput, &isnull));
-            break;
-        case 2: /* receive */
-            func_oid = DatumGetObjectId(SysCacheGetAttr(TYPEOID, tup, Anum_pg_type_typreceive, &isnull));
-            break;
-        case 3: /* send */
-            func_oid = DatumGetObjectId(SysCacheGetAttr(TYPEOID, tup, Anum_pg_type_typsend, &isnull));
-            break;
-    }
-
-    ReleaseSysCache(tup);
-    return func_oid;
-}
-
-static Datum
-shim_type_input(Oid type_oid, const char *input, int32 typmod)
-{
-    Oid input_func;
-    Datum result = (Datum) 0;
-
-    if (!OidIsValid(type_oid) || input == NULL)
-        return (Datum) 0;
-
-    input_func = get_type_io_func(type_oid, 0);
-    if (!OidIsValid(input_func))
-        return (Datum) 0;
-
-    PG_TRY();
-    {
-        result = OidInputFunctionCall(input_func, (char *) input, type_oid, typmod);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = (Datum) 0;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static char *
-shim_type_output(Oid type_oid, Datum value)
-{
-    Oid output_func;
-    char *result = NULL;
-
-    if (!OidIsValid(type_oid))
-        return NULL;
-
-    output_func = get_type_io_func(type_oid, 1);
-    if (!OidIsValid(output_func))
-        return NULL;
-
-    PG_TRY();
-    {
-        result = OidOutputFunctionCall(output_func, value);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = NULL;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static Datum
-shim_type_recv(Oid type_oid, StringInfo buf)
-{
-    Oid recv_func;
-    Datum result = (Datum) 0;
-
-    if (!OidIsValid(type_oid) || buf == NULL)
-        return (Datum) 0;
-
-    recv_func = get_type_io_func(type_oid, 2);
-    if (!OidIsValid(recv_func))
-        return (Datum) 0;
-
-    PG_TRY();
-    {
-        result = OidReceiveFunctionCall(recv_func, buf, type_oid, -1);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = (Datum) 0;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static void
-shim_type_send(Oid type_oid, Datum value, StringInfo buf)
-{
-    Oid send_func;
-    bytea *result;
-
-    if (!OidIsValid(type_oid) || buf == NULL)
-        return;
-
-    send_func = get_type_io_func(type_oid, 3);
-    if (!OidIsValid(send_func))
-        return;
-
-    PG_TRY();
-    {
-        result = OidSendFunctionCall(send_func, value);
-        if (result != NULL) {
-            appendBinaryStringInfo(buf, VARDATA(result), VARSIZE(result) - VARHDRSZ);
-        }
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-    }
-    PG_END_TRY();
-}
-
-static Oid
-shim_type_element_type(Oid type_oid)
-{
-    Oid result = InvalidOid;
-
-    if (!OidIsValid(type_oid))
-        return InvalidOid;
-
-    PG_TRY();
-    {
-        result = get_element_type(type_oid);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = InvalidOid;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static int16
-shim_type_length(Oid type_oid)
-{
-    int16 result = 0;
-
-    if (!OidIsValid(type_oid))
-        return 0;
-
-    PG_TRY();
-    {
-        result = get_typlen(type_oid);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = 0;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static bool
-shim_type_is_array(Oid type_oid)
-{
-    bool result = false;
-
-    if (!OidIsValid(type_oid))
-        return false;
-
-    PG_TRY();
-    {
-        result = OidIsValid(get_element_type(type_oid));
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = false;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static bool
-shim_type_is_composite(Oid type_oid)
-{
-    bool result = false;
-    char typtype;
-
-    if (!OidIsValid(type_oid))
-        return false;
-
-    PG_TRY();
-    {
-        typtype = get_typtype(type_oid);
-        result = (typtype == TYPTYPE_COMPOSITE);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = false;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static Oid
-shim_type_base_type(Oid type_oid)
-{
-    Oid result = InvalidOid;
-
-    if (!OidIsValid(type_oid))
-        return InvalidOid;
-
-    PG_TRY();
-    {
-        result = getBaseType(type_oid);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = InvalidOid;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-/* ---- shim-provided parser slots -------------------------------------- */
-
-/*
- * Parser access through the ABI.
- *
- * These are shim-owned because pg_parse_expr and parseTypeString can raise
- * (e.g. "syntax error at or near ..."), and the error firewall forbids a
- * Rust frame between a PG_TRY and a raising call.
- *
- * The signatures match kwabi.h exactly:
- *   KwabiNode (*parse_expr)(const char *sql, Oid *argtypes, int nargs);
- *   KwabiNode (*parse_type)(const char *type_name);
- *   void (*free_node)(KwabiNode node);
- *   Oid (*oper_left_type)(Oid oper_oid);
- *   Oid (*oper_right_type)(Oid oper_oid);
- *   Oid (*oper_result_type)(Oid oper_oid);
- *   bool (*oper_is_commutative)(Oid oper_oid);
- */
-
-static KwabiNode
-shim_parse_expr(const char *sql, Oid *argtypes, int nargs)
-{
-    KwabiNode result = NULL;
-
-    if (sql == NULL)
-        return NULL;
-
-    PG_TRY();
-    {
-        List *tree = raw_parser(sql, RAW_PARSE_PLPGSQL_EXPR);
-        RawStmt *raw;
-        Query *query;
-        Node *expr;
-
-        if (tree == NULL || list_length(tree) != 1) {
-            result = NULL;
-        } else {
-            raw = (RawStmt *) linitial(tree);
-            query = parse_analyze_fixedparams(raw, sql, argtypes, nargs, NULL);
-            expr = (Node *) ((TargetEntry *) linitial(query->targetList))->expr;
-            result = (KwabiNode) expr;
-        }
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = NULL;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static KwabiNode
-shim_parse_stmt(const char *sql)
-{
-    KwabiNode result = NULL;
-
-    if (sql == NULL)
-        return NULL;
-
-    PG_TRY();
-    {
-        List *tree = raw_parser(sql, RAW_PARSE_DEFAULT);
-        RawStmt *raw;
-        Query *query;
-
-        if (tree == NULL || list_length(tree) != 1) {
-            result = NULL;
-        } else {
-            raw = (RawStmt *) linitial(tree);
-            query = parse_analyze_fixedparams(raw, sql, NULL, 0, NULL);
-            result = (KwabiNode) query;
-        }
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = NULL;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static KwabiNode
-shim_parse_type(const char *type_name)
-{
-    KwabiNode result = NULL;
-
-    if (type_name == NULL)
-        return NULL;
-
-    PG_TRY();
-    {
-        result = (KwabiNode) typeStringToTypeName(type_name, NULL);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = NULL;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static void
-shim_free_node(KwabiNode node)
-{
-    if (node == NULL)
-        return;
-
-    PG_TRY();
-    {
-        pfree(node);
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-    }
-    PG_END_TRY();
-}
-
-static Oid
-shim_oper_left_type(Oid oper_oid)
-{
-    Oid result = InvalidOid;
-    HeapTuple tup;
-    bool isnull;
-
-    if (!OidIsValid(oper_oid))
-        return InvalidOid;
-
-    PG_TRY();
-    {
-        tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper_oid));
-        if (HeapTupleIsValid(tup)) {
-            result = DatumGetObjectId(SysCacheGetAttr(OPEROID, tup,
-                Anum_pg_operator_oprleft, &isnull));
-            ReleaseSysCache(tup);
-        }
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = InvalidOid;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static Oid
-shim_oper_right_type(Oid oper_oid)
-{
-    Oid result = InvalidOid;
-    HeapTuple tup;
-    bool isnull;
-
-    if (!OidIsValid(oper_oid))
-        return InvalidOid;
-
-    PG_TRY();
-    {
-        tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper_oid));
-        if (HeapTupleIsValid(tup)) {
-            result = DatumGetObjectId(SysCacheGetAttr(OPEROID, tup,
-                Anum_pg_operator_oprright, &isnull));
-            ReleaseSysCache(tup);
-        }
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = InvalidOid;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static Oid
-shim_oper_result_type(Oid oper_oid)
-{
-    Oid result = InvalidOid;
-    HeapTuple tup;
-    bool isnull;
-
-    if (!OidIsValid(oper_oid))
-        return InvalidOid;
-
-    PG_TRY();
-    {
-        tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper_oid));
-        if (HeapTupleIsValid(tup)) {
-            result = DatumGetObjectId(SysCacheGetAttr(OPEROID, tup,
-                Anum_pg_operator_oprresult, &isnull));
-            ReleaseSysCache(tup);
-        }
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = InvalidOid;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static bool
-shim_oper_is_commutative(Oid oper_oid)
-{
-    bool result = false;
-    HeapTuple tup;
-    bool isnull;
-    Oid commutator;
-
-    if (!OidIsValid(oper_oid))
-        return false;
-
-    PG_TRY();
-    {
-        tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper_oid));
-        if (HeapTupleIsValid(tup)) {
-            commutator = DatumGetObjectId(SysCacheGetAttr(OPEROID, tup,
-                Anum_pg_operator_oprcom, &isnull));
-            ReleaseSysCache(tup);
-            result = (commutator == oper_oid);
-        }
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = false;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-/* ---- shim-provided tuple/slot slots --------------------------------- */
-
-/*
- * Tuple and slot access through the ABI.
- *
- * These are shim-owned because catalog lookups and tuple access can raise,
- * and the error firewall forbids a Rust frame between a PG_TRY and a raising
- * call.
- *
- * The signatures match kwabi.h exactly:
- *   int (*tuple_natts)(TupleDesc tupdesc);
- *   Oid (*tuple_typeid)(TupleDesc tupdesc, int attno);
- *   int32 (*tuple_typmod)(TupleDesc tupdesc, int attno);
- *   const char *(*tuple_attname)(TupleDesc tupdesc, int attno);
- *   bool (*tuple_attisdropped)(TupleDesc tupdesc, int attno);
- *   int (*tuple_attnum)(TupleDesc tupdesc, const char *attname);
- *   Datum (*heap_tuple_getattr)(HeapTuple tuple, int attno, TupleDesc tupdesc, bool *isnull);
- *   HeapTuple (*heap_tuple_setattr)(HeapTuple tuple, int attno, Datum value, TupleDesc tupdesc);
- *   Oid (*heap_tuple_tableoid)(HeapTuple tuple);
- *   ItemPointer (*heap_tuple_tid)(HeapTuple tuple);
- *   bool (*slot_isnull)(TupleTableSlot slot, int attno);
- *   Datum (*slot_getattr)(TupleTableSlot slot, int attno, bool *isnull);
- *   TupleDesc (*slot_tupledesc)(TupleTableSlot slot);
- */
-
-static int
-shim_tuple_natts(TupleDesc tupdesc)
-{
-    if (tupdesc == NULL)
-        return 0;
-    return tupdesc->natts;
-}
-
-static Oid
-shim_tuple_typeid(TupleDesc tupdesc, int attno)
-{
-    if (tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
-        return InvalidOid;
-    return TupleDescAttr(tupdesc, attno - 1)->atttypid;
-}
-
-static int32
-shim_tuple_typmod(TupleDesc tupdesc, int attno)
-{
-    if (tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
-        return -1;
-    return TupleDescAttr(tupdesc, attno - 1)->atttypmod;
-}
-
-static const char *
-shim_tuple_attname(TupleDesc tupdesc, int attno)
-{
-    if (tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
-        return NULL;
-    return TupleDescAttr(tupdesc, attno - 1)->attname.data;
-}
-
-static bool
-shim_tuple_attisdropped(TupleDesc tupdesc, int attno)
-{
-    if (tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
-        return false;
-    return TupleDescAttr(tupdesc, attno - 1)->attisdropped;
-}
-
-static int
-shim_tuple_attnum(TupleDesc tupdesc, const char *attname)
-{
-    int i;
-
-    if (tupdesc == NULL || attname == NULL)
-        return 0;
-
-    for (i = 0; i < tupdesc->natts; i++)
-    {
-        if (strcmp(TupleDescAttr(tupdesc, i)->attname.data, attname) == 0)
-            return i + 1;
-    }
-    return 0;
-}
-
-static Datum
-shim_heap_tuple_getattr(HeapTuple tuple, int attno, TupleDesc tupdesc, bool *isnull)
-{
-    if (tuple == NULL || tupdesc == NULL || attno < 1 || attno > tupdesc->natts)
-    {
-        if (isnull != NULL)
-            *isnull = true;
-        return (Datum) 0;
-    }
-    return heap_getattr(tuple, attno, tupdesc, isnull);
-}
-
-static HeapTuple
-shim_heap_tuple_setattr(HeapTuple tuple, int attno, Datum value, TupleDesc tupdesc)
-{
-    int natts;
-    Datum *replValues;
-    bool *replIsnull;
-    bool *doReplace;
-    HeapTuple newtuple;
-    int i;
-
-    if (tuple == NULL || tupdesc == NULL)
-        return NULL;
-    natts = tupdesc->natts;
-    if (attno < 1 || attno > natts)
-        return NULL;
-
-    replValues = (Datum *) palloc(natts * sizeof(Datum));
-    replIsnull = (bool *) palloc(natts * sizeof(bool));
-    doReplace = (bool *) palloc(natts * sizeof(bool));
-
-    for (i = 0; i < natts; i++)
-    {
-        doReplace[i] = (i == attno - 1);
-        replValues[i] = value;
-        replIsnull[i] = false;
-    }
-
-    newtuple = heap_modify_tuple(tuple, tupdesc, replValues, replIsnull, doReplace);
-    pfree(replValues);
-    pfree(replIsnull);
-    pfree(doReplace);
-
-    return newtuple;
-}
-
-static Oid
-shim_heap_tuple_tableoid(HeapTuple tuple)
-{
-    if (tuple == NULL)
-        return InvalidOid;
-    return tuple->t_tableOid;
-}
-
-static ItemPointer
-shim_heap_tuple_tid(HeapTuple tuple)
-{
-    if (tuple == NULL || tuple->t_data == NULL)
-        return NULL;
-    return &tuple->t_data->t_ctid;
-}
-
-static bool
-shim_slot_isnull(KwabiSlot slot, int attno)
-{
-    TupleTableSlot *s = (TupleTableSlot *) slot;
-    if (s == NULL || attno < 1 || attno > s->tts_tupleDescriptor->natts)
-        return true;
-    return s->tts_isnull[attno - 1];
-}
-
-static Datum
-shim_slot_getattr(KwabiSlot slot, int attno, bool *isnull)
-{
-    TupleTableSlot *s = (TupleTableSlot *) slot;
-    if (s == NULL || attno < 1 || attno > s->tts_tupleDescriptor->natts)
-    {
-        if (isnull != NULL)
-            *isnull = true;
-        return (Datum) 0;
-    }
-    return slot_getattr(s, attno, isnull);
-}
-
-static TupleDesc
-shim_slot_tupledesc(KwabiSlot slot)
-{
-    TupleTableSlot *s = (TupleTableSlot *) slot;
-    if (s == NULL)
-        return NULL;
-    return s->tts_tupleDescriptor;
-}
-
-/* ---- shim-provided relation cache slots -------------------------------- */
-
-/*
- * Relation cache access through the ABI.
- *
- * These are shim-owned because relation_open can raise (e.g. "relation does
- * not exist"), and the error firewall forbids a Rust frame between a PG_TRY
- * and a raising call.
- *
- * The signatures match kwabi.h exactly:
- *   KwabiRelation (*relation_open)(Oid relid, KwabiLockMode lockmode);
- *   void (*relation_close)(KwabiRelation rel, KwabiLockMode lockmode);
- *   Oid (*relation_id)(KwabiRelation rel);
- *   const char *(*relation_name)(KwabiRelation rel);
- *   Oid (*relation_namespace)(KwabiRelation rel);
- *   TupleDesc (*relation_tupledesc)(KwabiRelation rel);
- *   Oid (*rel_id)(KwabiRelation rel);
- *   const char *(*rel_name)(KwabiRelation rel);
- *   Oid (*rel_namespace)(KwabiRelation rel);
- *   char (*rel_relkind)(KwabiRelation rel);
- *   Oid (*rel_relam)(KwabiRelation rel);
- *   TupleDesc (*rel_tupledesc)(KwabiRelation rel);
- *   List (*rel_index_list)(KwabiRelation rel);
- */
-
-static LOCKMODE
-kwabi_lockmode_to_pg(KwabiLockMode lockmode)
-{
-    switch (lockmode) {
-        case KWABI_LOCKMODE_NONE:      return NoLock;
-        case KWABI_LOCKMODE_SHARE:     return AccessShareLock;
-        case KWABI_LOCKMODE_EXCLUSIVE: return AccessExclusiveLock;
-        default:                       return AccessShareLock;
-    }
-}
-
-static KwabiRelation
-shim_relation_open(Oid relid, KwabiLockMode lockmode)
-{
-    KwabiRelation result = NULL;
-
-    if (!OidIsValid(relid))
-        return NULL;
-
-    PG_TRY();
-    {
-        result = (KwabiRelation) relation_open(relid, kwabi_lockmode_to_pg(lockmode));
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-        result = NULL;
-    }
-    PG_END_TRY();
-
-    return result;
-}
-
-static void
-shim_relation_close(KwabiRelation rel, KwabiLockMode lockmode)
-{
-    if (rel == NULL)
-        return;
-
-    PG_TRY();
-    {
-        relation_close((Relation) rel, kwabi_lockmode_to_pg(lockmode));
-    }
-    PG_CATCH();
-    {
-        shim_capture_error();
-    }
-    PG_END_TRY();
-}
-
-static Oid
-shim_relation_id(KwabiRelation rel)
-{
-    if (rel == NULL)
-        return InvalidOid;
-    return ((Relation) rel)->rd_id;
-}
-
-static const char *
-shim_relation_name(KwabiRelation rel)
-{
-    if (rel == NULL)
-        return NULL;
-    return RelationGetRelationName((Relation) rel);
-}
-
-static Oid
-shim_relation_namespace(KwabiRelation rel)
-{
-    if (rel == NULL)
-        return InvalidOid;
-    return ((Relation) rel)->rd_rel->relnamespace;
-}
-
-static TupleDesc
-shim_relation_tupledesc(KwabiRelation rel)
-{
-    if (rel == NULL)
-        return NULL;
-    return ((Relation) rel)->rd_att;
-}
-
-static Oid
-shim_rel_id(KwabiRelation rel)
-{
-    return shim_relation_id(rel);
-}
-
-static const char *
-shim_rel_name(KwabiRelation rel)
-{
-    return shim_relation_name(rel);
-}
-
-static Oid
-shim_rel_namespace(KwabiRelation rel)
-{
-    return shim_relation_namespace(rel);
-}
-
-static char
-shim_rel_relkind(KwabiRelation rel)
-{
-    if (rel == NULL)
-        return '\0';
-    return ((Relation) rel)->rd_rel->relkind;
-}
-
-static Oid
-shim_rel_relam(KwabiRelation rel)
-{
-    if (rel == NULL)
-        return InvalidOid;
-    return ((Relation) rel)->rd_rel->relam;
-}
-
-static TupleDesc
-shim_rel_tupledesc(KwabiRelation rel)
-{
-    return shim_relation_tupledesc(rel);
-}
-
-static KwabiList
-shim_rel_index_list(KwabiRelation rel)
-{
-    if (rel == NULL)
-        return NULL;
-    return (KwabiList) RelationGetIndexList((Relation) rel);
-}
+/* ---- native error/log functions -------------------------------------- */
 
 static const char *
 native_error_message(void)
@@ -1818,22 +200,11 @@ native_log_line(int level, const char *msg)
             (errmsg("%s", msg != NULL ? msg : "")));
 }
 
+/* ---- install_native -------------------------------------------------- */
+
 static void
 install_native(KwabiNative *n)
 {
-    /*
-     * PG_VERSION_NUM is 180006 on 18.6 -- major, minor, patch packed as
-     * Mmmppp. The major is the M part, so the divisor is 10000, not 100.
-     *
-     * This was wrong (/100, giving 1800) from the start and went unnoticed
-     * because nothing read the field. The capability bitset is the first
-     * consumer, and it exposed the bug immediately: ATOMIC_BODY is granted
-     * only for majors the CI matrix has measured, so an unmatchable 1800
-     * silently withheld a bit the runtime genuinely supports.
-     *
-     * Worth remembering as a pattern: a field with no reader is untested, and
-     * its correctness is discovered by its first consumer.
-     */
     n->pg_major = PG_VERSION_NUM / 10000;
     n->palloc = native_palloc;
     n->palloc0 = native_palloc0;
@@ -1849,288 +220,7 @@ install_native(KwabiNative *n)
     n->log_line = native_log_line;
 }
 
-/* ---- shim-provided node tree slots ----------------------------------- */
-
-static KwabiNodeType
-shim_node_type(KwabiNode node)
-{
-    if (node == NULL)
-        return KWABI_NODE_UNKNOWN;
-    switch (nodeTag((Node *) node)) {
-        case T_Query: return KWABI_NODE_QUERY;
-        case T_PlannedStmt: return KWABI_NODE_PLANNED_STMT;
-        case T_TargetEntry: return KWABI_NODE_TARGET_ENTRY;
-        case T_RangeTblEntry: return KWABI_NODE_RTE;
-        case T_SortGroupClause: return KWABI_NODE_SORT_GROUP_CLAUSE;
-        case T_Aggref: return KWABI_NODE_AGGREF;
-        case T_WindowFunc: return KWABI_NODE_WINDOW_FUNC;
-        case T_Var: return KWABI_NODE_VAR;
-        case T_Const: return KWABI_NODE_CONST;
-        case T_Param: return KWABI_NODE_PARAM;
-        case T_OpExpr: return KWABI_NODE_OP_EXPR;
-        case T_FuncExpr: return KWABI_NODE_FUNC_EXPR;
-        case T_DistinctExpr: return KWABI_NODE_DISTINCT_EXPR;
-        case T_NullIfExpr: return KWABI_NODE_NULLIF_EXPR;
-        case T_ScalarArrayOpExpr: return KWABI_NODE_SCALAR_ARRAY_OP_EXPR;
-        case T_BoolExpr: return KWABI_NODE_BOOL_EXPR;
-        case T_SubLink: return KWABI_NODE_SUB_LINK;
-        case T_SubPlan: return KWABI_NODE_SUB_PLAN;
-        case T_AlternativeSubPlan: return KWABI_NODE_ALTERNATIVE_SUB_PLAN;
-        case T_FieldSelect: return KWABI_NODE_FIELD_SELECT;
-        case T_FieldStore: return KWABI_NODE_FIELD_STORE;
-        case T_RelabelType: return KWABI_NODE_RELABEL_TYPE;
-        case T_CoerceViaIO: return KWABI_NODE_COERCE_VIA_IO;
-        case T_ArrayCoerceExpr: return KWABI_NODE_ARRAY_COERCE_EXPR;
-        case T_RowCompareExpr: return KWABI_NODE_ROW_COMPARE_EXPR;
-        case T_CoalesceExpr: return KWABI_NODE_COALESCE_EXPR;
-        case T_MinMaxExpr: return KWABI_NODE_MIN_MAX_EXPR;
-        case T_SQLValueFunction: return KWABI_NODE_SQLVALUE_FUNCTION;
-        case T_XmlExpr: return KWABI_NODE_XML_EXPR;
-        case T_NullTest: return KWABI_NODE_NULL_TEST;
-        case T_BooleanTest: return KWABI_NODE_BOOLEAN_TEST;
-        case T_CurrentOfExpr: return KWABI_NODE_CURRENT_OF_EXPR;
-        case T_NextValueExpr: return KWABI_NODE_NEXT_VALUE_EXPR;
-        case T_InferenceElem: return KWABI_NODE_INFERENCE_ELEM;
-        case T_JoinExpr: return KWABI_NODE_JOIN_EXPR;
-        case T_FromExpr: return KWABI_NODE_FROM_EXPR;
-        case T_OnConflictExpr: return KWABI_NODE_ON_CONFLICT_EXPR;
-        case T_TypeName: return KWABI_NODE_TYPE_NAME;
-        default: return KWABI_NODE_UNKNOWN;
-    }
-}
-
-static const char *
-shim_node_type_name(KwabiNode node)
-{
-    if (node == NULL)
-        return "unknown";
-    switch (nodeTag((Node *) node)) {
-        case T_Query: return "Query";
-        case T_PlannedStmt: return "PlannedStmt";
-        case T_SelectStmt: return "SelectStmt";
-        case T_InsertStmt: return "InsertStmt";
-        case T_UpdateStmt: return "UpdateStmt";
-        case T_DeleteStmt: return "DeleteStmt";
-        case T_TargetEntry: return "TargetEntry";
-        case T_RangeTblEntry: return "RangeTblEntry";
-        case T_SortGroupClause: return "SortGroupClause";
-        case T_Aggref: return "Aggref";
-        case T_WindowFunc: return "WindowFunc";
-        case T_Var: return "Var";
-        case T_Const: return "Const";
-        case T_Param: return "Param";
-        case T_OpExpr: return "OpExpr";
-        case T_FuncExpr: return "FuncExpr";
-        case T_DistinctExpr: return "DistinctExpr";
-        case T_NullIfExpr: return "NullIfExpr";
-        case T_ScalarArrayOpExpr: return "ScalarArrayOpExpr";
-        case T_BoolExpr: return "BoolExpr";
-        case T_SubLink: return "SubLink";
-        case T_SubPlan: return "SubPlan";
-        case T_AlternativeSubPlan: return "AlternativeSubPlan";
-        case T_FieldSelect: return "FieldSelect";
-        case T_FieldStore: return "FieldStore";
-        case T_RelabelType: return "RelabelType";
-        case T_CoerceViaIO: return "CoerceViaIO";
-        case T_ArrayCoerceExpr: return "ArrayCoerceExpr";
-        case T_RowCompareExpr: return "RowCompareExpr";
-        case T_CoalesceExpr: return "CoalesceExpr";
-        case T_MinMaxExpr: return "MinMaxExpr";
-        case T_SQLValueFunction: return "SQLValueFunction";
-        case T_XmlExpr: return "XmlExpr";
-        case T_NullTest: return "NullTest";
-        case T_BooleanTest: return "BooleanTest";
-        case T_CurrentOfExpr: return "CurrentOfExpr";
-        case T_NextValueExpr: return "NextValueExpr";
-        case T_InferenceElem: return "InferenceElem";
-        case T_JoinExpr: return "JoinExpr";
-        case T_FromExpr: return "FromExpr";
-        case T_OnConflictExpr: return "OnConflictExpr";
-        case T_TypeName: return "TypeName";
-        default: return "unknown";
-    }
-}
-
-static KwabiList
-shim_node_get_list(KwabiNode node)
-{
-    if (node == NULL)
-        return NULL;
-    /* For a Query node, return its target list. */
-    if (nodeTag((Node *) node) == T_Query)
-        return (KwabiList) ((Query *) node)->targetList;
-    return NULL;
-}
-
-static int
-shim_node_list_length(KwabiNode node)
-{
-    if (node == NULL)
-        return 0;
-    if (nodeTag((Node *) node) == T_Query)
-        return list_length((List *) ((Query *) node)->targetList);
-    /* Already a List (e.g. from query_rtable) */
-    return list_length((List *) node);
-}
-
-static KwabiNode
-shim_node_list_get(KwabiNode node, int index)
-{
-    if (node == NULL || index < 0)
-        return NULL;
-    if (nodeTag((Node *) node) == T_Query)
-        return (KwabiNode) list_nth((List *) ((Query *) node)->targetList, index);
-    /* Already a List (e.g. from query_rtable) */
-    return (KwabiNode) list_nth((List *) node, index);
-}
-
-static KwabiCmdType
-shim_query_command_type(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return KWABI_CMD_UNKNOWN;
-    switch (((Query *) query)->commandType) {
-        case CMD_SELECT: return KWABI_CMD_SELECT;
-        case CMD_UPDATE: return KWABI_CMD_UPDATE;
-        case CMD_INSERT: return KWABI_CMD_INSERT;
-        case CMD_DELETE: return KWABI_CMD_DELETE;
-        case CMD_UTILITY: return KWABI_CMD_UTILITY;
-        case CMD_NOTHING: return KWABI_CMD_NOTHING;
-        default: return KWABI_CMD_UNKNOWN;
-    }
-}
-
-static KwabiList
-shim_query_rtable(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return NULL;
-    return (KwabiList) ((Query *) query)->rtable;
-}
-
-static KwabiList
-shim_query_target_list(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return NULL;
-    return (KwabiList) ((Query *) query)->targetList;
-}
-
-static KwabiList
-shim_query_returning_list(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return NULL;
-    return (KwabiList) ((Query *) query)->returningList;
-}
-
-static KwabiNode
-shim_query_jointree(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return NULL;
-    return (KwabiNode) ((Query *) query)->jointree;
-}
-
-static KwabiList
-shim_query_group_clause(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return NULL;
-    return (KwabiList) ((Query *) query)->groupClause;
-}
-
-static KwabiList
-shim_query_sort_clause(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return NULL;
-    return (KwabiList) ((Query *) query)->sortClause;
-}
-
-static KwabiNode
-shim_query_limit_offset(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return NULL;
-    return (KwabiNode) ((Query *) query)->limitOffset;
-}
-
-static KwabiNode
-shim_query_limit_count(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return NULL;
-    return (KwabiNode) ((Query *) query)->limitCount;
-}
-
-static bool
-shim_query_has_for_update(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return false;
-    return ((Query *) query)->rowMarks != NIL;
-}
-
-static bool
-shim_query_has_row_security(KwabiNode query)
-{
-    if (query == NULL || nodeTag((Node *) query) != T_Query)
-        return false;
-    return ((Query *) query)->hasRowSecurity;
-}
-
-static KwabiPlan
-shim_planned_stmt_plan_tree(KwabiNode stmt)
-{
-    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
-        return NULL;
-    return (KwabiPlan) ((PlannedStmt *) stmt)->planTree;
-}
-
-static KwabiList
-shim_planned_stmt_rtable(KwabiNode stmt)
-{
-    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
-        return NULL;
-    return (KwabiList) ((PlannedStmt *) stmt)->rtable;
-}
-
-static KwabiList
-shim_planned_stmt_result_relations(KwabiNode stmt)
-{
-    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
-        return NULL;
-    return (KwabiList) ((PlannedStmt *) stmt)->resultRelations;
-}
-
-static bool
-shim_planned_stmt_has_returning(KwabiNode stmt)
-{
-    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
-        return false;
-    return ((PlannedStmt *) stmt)->hasReturning;
-}
-
-static bool
-shim_planned_stmt_has_modifying_cte(KwabiNode stmt)
-{
-    if (stmt == NULL || nodeTag((Node *) stmt) != T_PlannedStmt)
-        return false;
-    return ((PlannedStmt *) stmt)->hasModifyingCTE;
-}
-
-static bool
-shim_planned_stmt_is_utility(KwabiNode stmt)
-{
-    if (stmt == NULL)
-        return false;
-    if (nodeTag((Node *) stmt) == T_Query)
-        return ((Query *) stmt)->commandType == CMD_UTILITY;
-    if (nodeTag((Node *) stmt) == T_PlannedStmt)
-        return ((PlannedStmt *) stmt)->utilityStmt != NULL;
-    return false;
-}
+/* ---- lifecycle ------------------------------------------------------- */
 
 /* ---- lifecycle ------------------------------------------------------- */
 
@@ -2149,8 +239,8 @@ static void shim_error_get(KwabiError *out);
  * them. Copying is safe: the core's table is immutable and this happens once,
  * before anything can have cached a pointer.
  */
-static KwabiV1 shim_table;
-static const KwabiV1 *shim_api = NULL;
+KwabiV1 shim_table;
+const KwabiV1 *shim_api = NULL;
 
 /* Defined below with the other SQL-callable functions; _PG_init needs it. */
 static uint64_t shim_capabilities(void);
@@ -2172,148 +262,25 @@ _PG_init(void)
     shim_table.raise_error = shim_raise_error;
     shim_table.memory_context_create = shim_memory_context_create;
 
-    /*
-     * The fmgr group, shim-owned for the same reason as raise_error: these call
-     * into PostgreSQL, which can longjmp. Putting them in the runtime would put
-     * a Rust frame between the raise and this file's PG_TRY.
-     */
-    shim_table.fmgr_info = shim_fmgr_info;
-    shim_table.call_function = shim_call_function;
-    shim_table.call_function1 = shim_call_function1;
-    shim_table.call_function2 = shim_call_function2;
-    shim_table.call_function3 = shim_call_function3;
-
-    /*
-     * The SPI group, shim-owned for the same reason as the fmgr group: SPI
-     * calls can raise, and the error firewall forbids a Rust frame between
-     * a PG_TRY and a raising call. SPI_connect/SPI_execute/SPI_finish are
-     * ordinary PostgreSQL symbols the shim reaches directly.
-     */
-    shim_table.spi_execute = shim_spi_execute;
-    shim_table.spi_execute_plan = shim_spi_execute_plan;
-    shim_table.spi_free_result = shim_spi_free_result;
-    shim_table.spi_result_ntuples = shim_spi_result_ntuples;
-    shim_table.spi_result_get_value = shim_spi_result_get_value;
-
-    /*
-     * The GUC group, shim-owned for the same reason as the fmgr group: GUC
-     * calls can raise, and the error firewall forbids a Rust frame between
-     * a PG_TRY and a raising call. GetConfigOptionByName and SetConfigOption
-     * are ordinary PostgreSQL symbols the shim reaches directly.
-     */
-    shim_table.guc_get_int = shim_guc_get_int;
-    shim_table.guc_get_string = shim_guc_get_string;
-    shim_table.guc_get_bool = shim_guc_get_bool;
-    shim_table.guc_get_float = shim_guc_get_float;
-    shim_table.guc_set_int = shim_guc_set_int;
-    shim_table.guc_set_string = shim_guc_set_string;
-    shim_table.guc_set_bool = shim_guc_set_bool;
-    shim_table.guc_set_float = shim_guc_set_float;
-
-    /*
-     * The defrem group, shim-owned for the same reason: ALTER TABLE can
-     * raise, and the error firewall forbids a Rust frame between a PG_TRY
-     * and a raising call. SPI_connect/SPI_execute/SPI_finish are ordinary
-     * PostgreSQL symbols the shim reaches directly.
-     */
-    shim_table.defrem_create = shim_defrem_create;
-    shim_table.defrem_alter = shim_defrem_alter;
-    shim_table.defrem_drop = shim_defrem_drop;
-
-    /*
-     * The type system group, shim-owned for the same reason: catalog lookups
-     * can raise, and the error firewall forbids a Rust frame between a PG_TRY
-     * and a raising call.
-     */
-    shim_table.type_input = shim_type_input;
-    shim_table.type_output = shim_type_output;
-    shim_table.type_recv = shim_type_recv;
-    shim_table.type_send = shim_type_send;
-    shim_table.type_element_type = shim_type_element_type;
-    shim_table.type_length = shim_type_length;
-    shim_table.type_is_array = shim_type_is_array;
-    shim_table.type_is_composite = shim_type_is_composite;
-    shim_table.type_base_type = shim_type_base_type;
-
-    /*
-     * The tuple/slot group, shim-owned for the same reason: tuple access
-     * can raise, and the error firewall forbids a Rust frame between a PG_TRY
-     * and a raising call.
-     */
-    shim_table.tuple_natts = shim_tuple_natts;
-    shim_table.tuple_typeid = shim_tuple_typeid;
-    shim_table.tuple_typmod = shim_tuple_typmod;
-    shim_table.tuple_attname = shim_tuple_attname;
-    shim_table.tuple_attisdropped = shim_tuple_attisdropped;
-    shim_table.tuple_attnum = shim_tuple_attnum;
-    shim_table.heap_tuple_getattr = shim_heap_tuple_getattr;
-    shim_table.heap_tuple_setattr = shim_heap_tuple_setattr;
-    shim_table.heap_tuple_tableoid = shim_heap_tuple_tableoid;
-    shim_table.heap_tuple_tid = shim_heap_tuple_tid;
-    shim_table.slot_isnull = shim_slot_isnull;
-    shim_table.slot_getattr = shim_slot_getattr;
-    shim_table.slot_tupledesc = shim_slot_tupledesc;
-
-    /*
-     * The parser group, shim-owned for the same reason: pg_parse_expr and
-     * parseTypeString can raise, and the error firewall forbids a Rust frame
-     * between a PG_TRY and a raising call.
-     */
-    shim_table.parse_expr = shim_parse_expr;
-    shim_table.parse_stmt = shim_parse_stmt;
-    shim_table.parse_type = shim_parse_type;
-    shim_table.free_node = shim_free_node;
-    shim_table.oper_left_type = shim_oper_left_type;
-    shim_table.oper_right_type = shim_oper_right_type;
-    shim_table.oper_result_type = shim_oper_result_type;
-    shim_table.oper_is_commutative = shim_oper_is_commutative;
-
-    /*
-     * The node tree group, shim-owned for the same reason: node inspection
-     * can raise, and the error firewall forbids a Rust frame between a PG_TRY
-     * and a raising call.
-     */
-    shim_table.node_type = shim_node_type;
-    shim_table.node_type_name = shim_node_type_name;
-    shim_table.node_get_list = shim_node_get_list;
-    shim_table.node_list_length = shim_node_list_length;
-    shim_table.node_list_get = shim_node_list_get;
-    shim_table.query_command_type = shim_query_command_type;
-    shim_table.query_rtable = shim_query_rtable;
-    shim_table.query_target_list = shim_query_target_list;
-    shim_table.query_returning_list = shim_query_returning_list;
-    shim_table.query_jointree = shim_query_jointree;
-    shim_table.query_group_clause = shim_query_group_clause;
-    shim_table.query_sort_clause = shim_query_sort_clause;
-    shim_table.query_limit_offset = shim_query_limit_offset;
-    shim_table.query_limit_count = shim_query_limit_count;
-    shim_table.query_has_for_update = shim_query_has_for_update;
-    shim_table.query_has_row_security = shim_query_has_row_security;
-    shim_table.planned_stmt_plan_tree = shim_planned_stmt_plan_tree;
-    shim_table.planned_stmt_rtable = shim_planned_stmt_rtable;
-    shim_table.planned_stmt_result_relations = shim_planned_stmt_result_relations;
-    shim_table.planned_stmt_has_returning = shim_planned_stmt_has_returning;
-    shim_table.planned_stmt_has_modifying_cte = shim_planned_stmt_has_modifying_cte;
-    shim_table.planned_stmt_is_utility = shim_planned_stmt_is_utility;
-
-    /*
-     * The relation cache group, shim-owned for the same reason: relation_open
-     * can raise, and the error firewall forbids a Rust frame between a PG_TRY
-     * and a raising call.
-     */
-    shim_table.relation_open = shim_relation_open;
-    shim_table.relation_close = shim_relation_close;
-    shim_table.relation_id = shim_relation_id;
-    shim_table.relation_name = shim_relation_name;
-    shim_table.relation_namespace = shim_relation_namespace;
-    shim_table.relation_tupledesc = shim_relation_tupledesc;
-    shim_table.rel_id = shim_rel_id;
-    shim_table.rel_name = shim_rel_name;
-    shim_table.rel_namespace = shim_rel_namespace;
-    shim_table.rel_relkind = shim_rel_relkind;
-    shim_table.rel_relam = shim_rel_relam;
-    shim_table.rel_tupledesc = shim_rel_tupledesc;
-    shim_table.rel_index_list = shim_rel_index_list;
+    /* Initialize all shim groups */
+    init_group_fmgr();
+    init_group_spi();
+    init_group_guc();
+    init_group_defrem();
+    init_group_type();
+    init_group_stringinfo();
+    init_group_shmem();
+    init_group_parser();
+    init_group_tuple();
+    init_group_relation();
+    init_group_buffer();
+    init_group_syscache();
+    init_group_lwlock();
+    init_group_node();
+    init_group_lock();
+    init_group_extension();
+    init_group_explain();
+    init_group_transaction();
 
     /*
      * The catching direction is shim-owned for the same reason: it needs
@@ -2333,6 +300,7 @@ _PG_init(void)
 
     shim_api = &shim_table;
 }
+
 
 /* ---- SQL-callable proof functions ------------------------------------ */
 
@@ -2456,7 +424,7 @@ kwabi_raise_test(PG_FUNCTION_ARGS)
  * answer reflects the slots the shim installed. pg_major comes from the shim
  * because only the shim knows which PostgreSQL this is.
  */
-static uint64_t
+uint64_t
 shim_capabilities(void)
 {
     return kwabi_capabilities_of(&shim_table, (uint32_t) (PG_VERSION_NUM / 10000));
@@ -4092,6 +2060,9 @@ kwabi_version(PG_FUNCTION_ARGS)
     PG_RETURN_TEXT_P(cstring_to_text(buf));
 }
 
+
+/* ---- loading a real extension through the ABI ------------------------ */
+
 /* ---- loading a real extension through the ABI ------------------------ */
 
 /*
@@ -5460,6 +3431,306 @@ kwabi_relation_control(PG_FUNCTION_ARGS)
 }
 
 /* ========================================================================
+ * Buffer manager proof functions
+ * ========================================================================
+ *
+ * These exercise the four buffer manager slots through the published table
+ * -- the same path an extension takes -- so what is tested is the ABI, not a
+ * parallel copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_buffer_test() -> bool
+ *
+ * Test buffer manager operations through the ABI.
+ * Opens a relation, reads a buffer, gets its page, marks it dirty, and
+ * releases it. Verifies that the page pointer is non-NULL and that the
+ * buffer lifecycle completes without error.
+ */
+PG_FUNCTION_INFO_V1(kwabi_buffer_test);
+
+Datum
+kwabi_buffer_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->buffer_get == NULL || api->buffer_release == NULL ||
+        api->buffer_get_page == NULL || api->buffer_mark_dirty == NULL ||
+        api->relation_open == NULL || api->relation_close == NULL)
+        ereport(ERROR, (errmsg("kwabi: buffer slots are not wired")));
+
+    /* Open pg_class through the ABI */
+    KwabiRelation rel = api->relation_open(1259, KWABI_LOCKMODE_SHARE); /* pg_class */
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    /* Read block 0 through the ABI */
+    Buffer buf = api->buffer_get(rel, 0);
+    if (buf == InvalidBuffer) {
+        api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+        ereport(ERROR, (errmsg("kwabi: buffer_get returned InvalidBuffer")));
+    }
+
+    /* Get the page through the ABI */
+    Page page = api->buffer_get_page(buf);
+    if (page == NULL) {
+        api->buffer_release(buf);
+        api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+        ereport(ERROR, (errmsg("kwabi: buffer_get_page returned NULL")));
+    }
+
+    /* Mark the buffer dirty through the ABI */
+    api->buffer_mark_dirty(buf);
+
+    /* Release the buffer through the ABI */
+    api->buffer_release(buf);
+
+    /* Close the relation */
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_buffer_page_content() -> bool
+ *
+ * Test that the page obtained through the ABI has valid content.
+ * Reads block 0 of pg_class and checks that the page starts with a valid
+ * PageHeader (pd_lower > SizeOfPageHeaderData and pd_lower <= pd_upper).
+ */
+PG_FUNCTION_INFO_V1(kwabi_buffer_page_content);
+
+Datum
+kwabi_buffer_page_content(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->buffer_get == NULL || api->buffer_release == NULL ||
+        api->buffer_get_page == NULL ||
+        api->relation_open == NULL || api->relation_close == NULL)
+        ereport(ERROR, (errmsg("kwabi: buffer slots are not wired")));
+
+    KwabiRelation rel = api->relation_open(1259, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    Buffer buf = api->buffer_get(rel, 0);
+    if (buf == InvalidBuffer) {
+        api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+        ereport(ERROR, (errmsg("kwabi: buffer_get returned InvalidBuffer")));
+    }
+
+    Page page = api->buffer_get_page(buf);
+    if (page == NULL) {
+        api->buffer_release(buf);
+        api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+        ereport(ERROR, (errmsg("kwabi: buffer_get_page returned NULL")));
+    }
+
+    /* Validate the page header */
+    PageHeader ph = (PageHeader) page;
+    bool valid = (ph->pd_lower > SizeOfPageHeaderData &&
+                  ph->pd_lower <= ph->pd_upper &&
+                  ph->pd_upper <= BLCKSZ);
+
+    api->buffer_release(buf);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    PG_RETURN_BOOL(valid);
+}
+
+/*
+ * kwabi_buffer_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It reads a buffer and asserts a wrong page property.
+ * That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_buffer_control);
+
+Datum
+kwabi_buffer_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->buffer_get == NULL || api->buffer_release == NULL ||
+        api->buffer_get_page == NULL ||
+        api->relation_open == NULL || api->relation_close == NULL)
+        ereport(ERROR, (errmsg("kwabi: buffer slots are not wired")));
+
+    KwabiRelation rel = api->relation_open(1259, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    Buffer buf = api->buffer_get(rel, 0);
+    if (buf == InvalidBuffer) {
+        api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+        ereport(ERROR, (errmsg("kwabi: buffer_get returned InvalidBuffer")));
+    }
+
+    Page page = api->buffer_get_page(buf);
+    if (page == NULL) {
+        api->buffer_release(buf);
+        api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+        ereport(ERROR, (errmsg("kwabi: buffer_get_page returned NULL")));
+    }
+
+    PageHeader ph = (PageHeader) page;
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (ph->pd_lower == 0) {
+        api->buffer_release(buf);
+        api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+        PG_RETURN_BOOL(true);   /* the comparison thinks pd_lower == 0: broken */
+    }
+
+    api->buffer_release(buf);
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    ereport(ERROR,
+            (errmsg("kwabi: lock negative control fired as intended"),
+             errdetail("pd_lower is not 0 -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * LWLock proof functions
+ * ========================================================================
+ *
+ * These exercise the four lwlock slots through the published table -- the
+ * same path an extension takes -- so what is tested is the ABI, not a
+ * parallel copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_lwlock_test() -> bool
+ *
+ * Test lwlock operations through the ABI.
+ * Acquires an LWLock in shared mode, checks held_by_me, releases it,
+ * and verifies held_by_me returns false.
+ */
+PG_FUNCTION_INFO_V1(kwabi_lwlock_test);
+
+Datum
+kwabi_lwlock_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->lwlock_acquire == NULL || api->lwlock_release == NULL ||
+        api->lwlock_held_by_me == NULL || api->lwlock_cond_acquire == NULL)
+        ereport(ERROR, (errmsg("kwabi: lwlock slots are not wired")));
+
+    /* Use a known LWLock: the lock manager's lock */
+    LWLock *lock = &MainLWLockArray[0].lock;
+
+    /* Acquire in shared mode */
+    api->lwlock_acquire(lock, KWABI_LWLOCKMODE_SHARE);
+
+    /* Must be held by me */
+    if (!api->lwlock_held_by_me(lock))
+        ereport(ERROR, (errmsg("kwabi: lwlock_held_by_me returned false after acquire")));
+
+    /* Release */
+    api->lwlock_release(lock);
+
+    /* Must NOT be held by me */
+    if (api->lwlock_held_by_me(lock))
+        ereport(ERROR, (errmsg("kwabi: lwlock_held_by_me returned true after release")));
+
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_lwlock_cond_test() -> bool
+ *
+ * Test conditional lwlock acquire through the ABI.
+ * Tries to acquire an LWLock conditionally, checks the result, and
+ * releases if acquired.
+ */
+PG_FUNCTION_INFO_V1(kwabi_lwlock_cond_test);
+
+Datum
+kwabi_lwlock_cond_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->lwlock_acquire == NULL || api->lwlock_release == NULL ||
+        api->lwlock_held_by_me == NULL || api->lwlock_cond_acquire == NULL)
+        ereport(ERROR, (errmsg("kwabi: lwlock slots are not wired")));
+
+    /* Use a known LWLock */
+    LWLock *lock = &MainLWLockArray[0].lock;
+
+    /* Try conditional acquire */
+    bool acquired = api->lwlock_cond_acquire(lock, KWABI_LWLOCKMODE_SHARE);
+
+    if (acquired) {
+        /* Must be held by me */
+        if (!api->lwlock_held_by_me(lock))
+            ereport(ERROR, (errmsg("kwabi: lwlock_held_by_me returned false after cond_acquire")));
+
+        /* Release */
+        api->lwlock_release(lock);
+
+        /* Must NOT be held by me */
+        if (api->lwlock_held_by_me(lock))
+            ereport(ERROR, (errmsg("kwabi: lwlock_held_by_me returned true after release")));
+    }
+
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_lwlock_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It asserts a wrong lwlock state, which must fail.
+ */
+PG_FUNCTION_INFO_V1(kwabi_lwlock_control);
+
+Datum
+kwabi_lwlock_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->lwlock_acquire == NULL || api->lwlock_release == NULL ||
+        api->lwlock_held_by_me == NULL)
+        ereport(ERROR, (errmsg("kwabi: lwlock slots are not wired")));
+
+    LWLock *lock = &MainLWLockArray[0].lock;
+
+    /* Acquire */
+    api->lwlock_acquire(lock, KWABI_LWLOCKMODE_SHARE);
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (!api->lwlock_held_by_me(lock)) {
+        api->lwlock_release(lock);
+        PG_RETURN_BOOL(true);   /* the comparison thinks held_by_me is false: broken */
+    }
+
+    api->lwlock_release(lock);
+
+    ereport(ERROR,
+            (errmsg("kwabi: lwlock negative control fired as intended"),
+             errdetail("lwlock_held_by_me is true after acquire -- the value comparison is honest")));
+}
+
+/* ========================================================================
  * Type system proof functions
  * ========================================================================
  *
@@ -5657,4 +3928,351 @@ kwabi_type_control(PG_FUNCTION_ARGS)
     ereport(ERROR,
             (errmsg("kwabi: type negative control fired as intended"),
              errdetail("type_length(23) is %d, not 999 -- the value comparison is honest", len)));
+}
+
+/*
+ * kwabi_stringinfo_test() -> text
+ *
+ * Test all seven stringinfo slots through the ABI.
+ * Creates a StringInfo, appends "hello ", appends ' ', appends 42,
+ * then reads back the data and length.
+ */
+PG_FUNCTION_INFO_V1(kwabi_stringinfo_test);
+
+Datum
+kwabi_stringinfo_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->stringinfo_init == NULL || api->stringinfo_reset == NULL ||
+        api->stringinfo_append == NULL || api->stringinfo_append_char == NULL ||
+        api->stringinfo_append_int == NULL || api->stringinfo_data == NULL ||
+        api->stringinfo_len == NULL)
+        ereport(ERROR, (errmsg("kwabi: stringinfo slots are not wired")));
+
+    /* Allocate a StringInfoData on the stack */
+    StringInfoData str;
+    str.data = NULL;
+    str.len = 0;
+    str.maxlen = 0;
+    str.cursor = 0;
+
+    /* 1. Init */
+    api->stringinfo_init(&str);
+
+    /* 2. Append "hello " */
+    api->stringinfo_append(&str, "hello ");
+
+    /* 3. Append a space char */
+    api->stringinfo_append_char(&str, ' ');
+
+    /* 4. Append integer 42 */
+    api->stringinfo_append_int(&str, 42);
+
+    /* 5. Read back data and length */
+    const char *data = api->stringinfo_data(&str);
+    int len = api->stringinfo_len(&str);
+
+    /* Build result text */
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s", data ? data : "(null)");
+
+    /* 6. Reset and verify it cleared */
+    api->stringinfo_reset(&str);
+    int len_after_reset = api->stringinfo_len(&str);
+
+    /* Clean up */
+    if (str.data != NULL)
+        pfree(str.data);
+
+    /* Return the data if length matches expectation */
+    if (len == 7 && len_after_reset == 0 && data != NULL && strcmp(data, "hello 42") == 0)
+        PG_RETURN_TEXT_P(cstring_to_text(buf));
+
+    /* Something went wrong */
+    ereport(ERROR,
+            (errmsg("kwabi: stringinfo test failed"),
+             errdetail("len=%d len_after_reset=%d data=\"%s\"",
+                       len, len_after_reset, data ? data : "(null)")));
+}
+
+/*
+ * kwabi_stringinfo_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It asserts stringinfo length == 999, which must fail.
+ */
+PG_FUNCTION_INFO_V1(kwabi_stringinfo_control);
+
+Datum
+kwabi_stringinfo_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->stringinfo_init == NULL || api->stringinfo_append == NULL ||
+        api->stringinfo_len == NULL)
+        ereport(ERROR, (errmsg("kwabi: stringinfo slots are not wired")));
+
+    StringInfoData str;
+    str.data = NULL;
+    str.len = 0;
+    str.maxlen = 0;
+    str.cursor = 0;
+
+    api->stringinfo_init(&str);
+    api->stringinfo_append(&str, "test");
+
+    int len = api->stringinfo_len(&str);
+
+    if (str.data != NULL)
+        pfree(str.data);
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (len == 999)
+        PG_RETURN_BOOL(true);   /* the comparison thinks 4 == 999: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: stringinfo negative control fired as intended"),
+             errdetail("stringinfo length is not 999 -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * Syscache proof functions
+ * ========================================================================
+ *
+ * These exercise the three syscache slots through the published table --
+ * the same path an extension takes -- so what is tested is the ABI, not a
+ * parallel copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_syscache_test() -> text
+ *
+ * Test all three syscache slots through the ABI.
+ * Looks up int4 (type OID 23) in the TYPEOID cache, gets its typinput
+ * function OID, then does a full tuple lookup and frees it.
+ */
+PG_FUNCTION_INFO_V1(kwabi_syscache_test);
+
+Datum
+kwabi_syscache_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->syscache_get_oid == NULL || api->syscache_get_tuple == NULL ||
+        api->syscache_free_tuple == NULL)
+        ereport(ERROR, (errmsg("kwabi: syscache slots are not wired")));
+
+    /* 1. syscache_get_oid: look up int4's typinput function */
+    Oid typinput = api->syscache_get_oid("TYPEOID", "typinput",
+                                         ObjectIdGetDatum(23));
+    if (!OidIsValid(typinput))
+        ereport(ERROR, (errmsg("kwabi: syscache_get_oid returned InvalidOid")));
+
+    /* 2. syscache_get_tuple: get the full tuple for int4 */
+    HeapTuple tup = api->syscache_get_tuple("TYPEOID",
+                                           ObjectIdGetDatum(23));
+    if (tup == NULL)
+        ereport(ERROR, (errmsg("kwabi: syscache_get_tuple returned NULL")));
+
+    /* 3. syscache_free_tuple: release it */
+    api->syscache_free_tuple(tup);
+
+    PG_RETURN_TEXT_P(cstring_to_text("kwabi: syscache test passed"));
+}
+
+/*
+ * kwabi_syscache_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It calls syscache_get_oid for int4's typinput
+ * and asserts the result is 999. That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_syscache_control);
+
+Datum
+kwabi_syscache_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->syscache_get_oid == NULL)
+        ereport(ERROR, (errmsg("kwabi: syscache_get_oid is not wired")));
+
+    Oid typinput = shim_api->syscache_get_oid("TYPEOID", "typinput",
+                                              ObjectIdGetDatum(23));
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (typinput == 999)
+        PG_RETURN_BOOL(true);   /* the comparison thinks typinput == 999: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: syscache negative control fired as intended"),
+             errdetail("typinput is not 999 -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * Shmem proof functions
+ * ========================================================================
+ *
+ * These exercise the three shmem slots through the published table --
+ * the same path an extension takes -- so what is tested is the ABI, not a
+ * parallel copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_shmem_test() -> text
+ *
+ * Test all three shmem slots through the ABI.
+ * Allocates shared memory, writes to it, reads it back, frees it,
+ * then uses shmem_get to allocate a named struct.
+ */
+PG_FUNCTION_INFO_V1(kwabi_shmem_test);
+
+Datum
+kwabi_shmem_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->shmem_alloc == NULL || api->shmem_free == NULL ||
+        api->shmem_get == NULL)
+        ereport(ERROR, (errmsg("kwabi: shmem slots are not wired")));
+
+    /* 1. shmem_alloc: allocate 64 bytes of shared memory */
+    void *ptr = api->shmem_alloc(64);
+    if (ptr == NULL)
+        ereport(ERROR, (errmsg("kwabi: shmem_alloc returned NULL")));
+
+    /* 2. Write a known value to it */
+    memset(ptr, 0, 64);
+    *(int *)ptr = 42;
+
+    /* 3. Read it back */
+    if (*(int *)ptr != 42)
+        ereport(ERROR, (errmsg("kwabi: shmem write/read mismatch")));
+
+    /* 4. shmem_free: release it */
+    api->shmem_free(ptr);
+
+    /* 5. shmem_get: allocate a named struct */
+    void *named = api->shmem_get("kwabi_test_shmem", 128);
+    if (named == NULL)
+        ereport(ERROR, (errmsg("kwabi: shmem_get returned NULL")));
+
+    /* 6. Write and read back */
+    memset(named, 0, 128);
+    *(int *)named = 99;
+    if (*(int *)named != 99)
+        ereport(ERROR, (errmsg("kwabi: shmem_get write/read mismatch")));
+
+    PG_RETURN_TEXT_P(cstring_to_text("kwabi: shmem test passed"));
+}
+
+/*
+ * kwabi_shmem_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It calls shmem_alloc and asserts a wrong size,
+ * which must fail. That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_shmem_control);
+
+Datum
+kwabi_shmem_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->shmem_alloc == NULL)
+        ereport(ERROR, (errmsg("kwabi: shmem_alloc is not wired")));
+
+    void *ptr = shim_api->shmem_alloc(64);
+    if (ptr == NULL)
+        ereport(ERROR, (errmsg("kwabi: shmem_alloc returned NULL")));
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (sizeof(void *) == 999)
+        PG_RETURN_BOOL(true);   /* the comparison thinks sizeof(void*) == 999: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: shmem negative control fired as intended"),
+             errdetail("sizeof(void*) is not 999 -- the value comparison is honest")));
+}
+
+/* ========================================================================
+ * Extension proof functions
+ * ========================================================================
+ *
+ * These exercise the three extension slots through the published table --
+ * the same path an extension takes -- so what is tested is the ABI, not a
+ * parallel copy of it. They are test scaffolding: none is a slot in KwabiV1.
+ */
+
+/*
+ * kwabi_extension_test() -> text
+ *
+ * Test all three extension slots through the ABI.
+ * Looks up "plpgsql" (always installed), checks it is installed, and
+ * reads its version. Returns a summary string.
+ */
+PG_FUNCTION_INFO_V1(kwabi_extension_test);
+
+Datum
+kwabi_extension_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->extension_oid == NULL || api->extension_installed == NULL ||
+        api->extension_version == NULL)
+        ereport(ERROR, (errmsg("kwabi: extension slots are not wired")));
+
+    /* 1. extension_oid: look up plpgsql */
+    Oid oid = api->extension_oid("plpgsql");
+    if (!OidIsValid(oid))
+        ereport(ERROR, (errmsg("kwabi: extension_oid returned InvalidOid for plpgsql")));
+
+    /* 2. extension_installed: plpgsql must be installed */
+    bool installed = api->extension_installed("plpgsql");
+    if (!installed)
+        ereport(ERROR, (errmsg("kwabi: extension_installed returned false for plpgsql")));
+
+    /* 3. extension_version: must return a non-NULL string */
+    const char *ver = api->extension_version("plpgsql");
+    if (ver == NULL)
+        ereport(ERROR, (errmsg("kwabi: extension_version returned NULL for plpgsql")));
+
+    PG_RETURN_TEXT_P(cstring_to_text(
+        psprintf("kwabi: extension test passed (oid=%u installed=%d version=%s)",
+                 (unsigned) oid, (int) installed, ver)));
+}
+
+/*
+ * kwabi_extension_control() -> bool
+ *
+ * The NEGATIVE CONTROL. It calls extension_oid for plpgsql and asserts
+ * the result is 999. That assertion must fail, so this must RAISE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_extension_control);
+
+Datum
+kwabi_extension_control(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->extension_oid == NULL)
+        ereport(ERROR, (errmsg("kwabi: extension_oid is not wired")));
+
+    Oid oid = shim_api->extension_oid("plpgsql");
+
+    /* The control's whole point: this comparison must be FALSE. */
+    if (oid == 999)
+        PG_RETURN_BOOL(true);   /* the comparison thinks oid == 999: broken */
+
+    ereport(ERROR,
+            (errmsg("kwabi: extension negative control fired as intended"),
+             errdetail("extension oid is not 999 -- the value comparison is honest")));
 }

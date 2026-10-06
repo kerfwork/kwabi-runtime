@@ -815,6 +815,265 @@ for M in "${MAJORS[@]}"; do
         echo "      see $OUT"
     fi
 
+    # --- buffer-lock-api: buffer manager and lock slots through the ABI ---
+    #
+    # The buffer manager and lock group: read buffers, manage pages,
+    # acquire/release LWLocks and spinlocks, and check lock state. The
+    # assertion that matters is `buffer_manager` -- it proves that
+    # buffer_get, buffer_get_page, buffer_mark_dirty, and buffer_release
+    # all work together.
+    #
+    # ON_ERROR_STOP is off: check 10 (the negative control) raises by design.
+    echo "  [buffer-lock-api] buffer manager and locks against :$PORT"
+    OUT=/tmp/kwabi_buflock_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f buffer-lock-api.sql postgres >"$OUT" 2>&1
+
+    BUF_TRUE=$(grep -cE '^ t *$' "$OUT")
+    BUF_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    BUF_CONTROL=$(grep -c "lock negative control fired as intended" "$OUT")
+    # The three that carry the meaning, so a failure says which.
+    BUF_MGR=$(grep -A2 'buffer_manager' "$OUT" | grep -cE '^ t')
+    BUF_LWLOCK=$(grep -A2 'lwlock_lifecycle' "$OUT" | grep -cE '^ t')
+    BUF_SPIN=$(grep -A2 'spinlock_lifecycle' "$OUT" | grep -cE '^ t')
+
+    if [ "$BUF_FALSE" -eq 0 ] && [ "$BUF_CONTROL" -ge 1 ] && \
+       [ "$BUF_MGR" -ge 1 ] && [ "$BUF_LWLOCK" -ge 1 ] && \
+       [ "$BUF_SPIN" -ge 1 ]; then
+        record PASS "$M" "buffer-lock-api green ($BUF_TRUE assertions)"
+    else
+        record FAIL "$M" "buffer-lock-api: true=$BUF_TRUE false=$BUF_FALSE control=$BUF_CONTROL mgr=$BUF_MGR lwlock=$BUF_LWLOCK spin=$BUF_SPIN"
+        echo "      see $OUT"
+    fi
+
+    # --- lock-api: lock slots through the ABI -----------------------------
+    #
+    # The lock group: acquire, release, and check LWLocks and spinlocks.
+    # The assertion that matters is `lock_lifecycle` — it proves that
+    # lock_acquire, lock_held_by_me, and lock_release all work together.
+    #
+    # ON_ERROR_STOP is off: check 5 (the negative control) raises by design.
+    echo "  [lock-api] lock slots against :$PORT"
+    OUT=/tmp/kwabi_lock_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f lock-api.sql postgres >"$OUT" 2>&1
+
+    LOCK_TRUE=$(grep -cE '^ t *$' "$OUT")
+    LOCK_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    LOCK_CONTROL=$(grep -c "lock negative control fired as intended" "$OUT")
+    # The one that carries the meaning.
+    LOCK_LIFECYCLE=$(grep -A2 'lock_lifecycle' "$OUT" | grep -cE '^ t')
+
+    if [ "$LOCK_FALSE" -eq 0 ] && [ "$LOCK_CONTROL" -ge 1 ] && \
+       [ "$LOCK_LIFECYCLE" -ge 1 ]; then
+        record PASS "$M" "lock-api green ($LOCK_TRUE assertions)"
+    else
+        record FAIL "$M" "lock-api: true=$LOCK_TRUE false=$LOCK_FALSE control=$LOCK_CONTROL lifecycle=$LOCK_LIFECYCLE"
+        echo "      see $OUT"
+    fi
+
+    # --- stringinfo-api: stringinfo slots through the ABI -----------------
+    #
+    # The stringinfo group: create, append, read, reset. The assertion that
+    # matters is `stringinfo_basic` — it proves that stringinfo_init,
+    # stringinfo_append, stringinfo_append_char, stringinfo_append_int,
+    # stringinfo_data, stringinfo_len, and stringinfo_reset all work together.
+    #
+    # ON_ERROR_STOP is off: check 3 (the negative control) raises by design.
+    echo "  [stringinfo-api] stringinfo slots against :$PORT"
+    OUT=/tmp/kwabi_stringinfo_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f stringinfo-api.sql postgres >"$OUT" 2>&1
+
+    SI_TRUE=$(grep -cE '^ t *$' "$OUT")
+    SI_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    SI_CONTROL=$(grep -c "stringinfo negative control fired as intended" "$OUT")
+    # The one that carries the meaning.
+    SI_BASIC=$(grep -A2 'stringinfo_basic' "$OUT" | grep -cE '^ t')
+
+    if [ "$SI_FALSE" -eq 0 ] && [ "$SI_CONTROL" -ge 1 ] && \
+       [ "$SI_BASIC" -ge 1 ]; then
+        record PASS "$M" "stringinfo-api green ($SI_TRUE assertions)"
+    else
+        record FAIL "$M" "stringinfo-api: true=$SI_TRUE false=$SI_FALSE control=$SI_CONTROL basic=$SI_BASIC"
+        echo "      see $OUT"
+    fi
+
+    # --- shmem-api: shmem slots through the ABI ---------------------------
+    #
+    # The shmem group: allocate, write, read, free shared memory. The
+    # assertion that matters is `shmem_basic` — it proves that shmem_alloc,
+    # shmem_free, and shmem_get all work together.
+    #
+    # ON_ERROR_STOP is off: check 2 (the negative control) raises by design.
+    echo "  [shmem-api] shmem slots against :$PORT"
+    OUT=/tmp/kwabi_shmem_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f shmem-api.sql postgres >"$OUT" 2>&1
+
+    SH_TRUE=$(grep -cE '^ t *$' "$OUT")
+    SH_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    SH_CONTROL=$(grep -c "shmem negative control fired as intended" "$OUT")
+    # The one that carries the meaning.
+    SH_BASIC=$(grep -A2 'shmem_basic' "$OUT" | grep -cE '^ t')
+
+    if [ "$SH_FALSE" -eq 0 ] && [ "$SH_CONTROL" -ge 1 ] && \
+       [ "$SH_BASIC" -ge 1 ]; then
+        record PASS "$M" "shmem-api green ($SH_TRUE assertions)"
+    else
+        record FAIL "$M" "shmem-api: true=$SH_TRUE false=$SH_FALSE control=$SH_CONTROL basic=$SH_BASIC"
+        echo "      see $OUT"
+    fi
+
+    # --- syscache-api: syscache slots through the ABI ----------------------
+    #
+    # The syscache group: look up system catalog entries. The assertion that
+    # matters is `syscache_basic` — it proves that syscache_get_oid,
+    # syscache_get_tuple, and syscache_free_tuple all work together.
+    #
+    # ON_ERROR_STOP is off: check 2 (the negative control) raises by design.
+    echo "  [syscache-api] syscache slots against :$PORT"
+    OUT=/tmp/kwabi_syscache_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f syscache-api.sql postgres >"$OUT" 2>&1
+
+    SC_TRUE=$(grep -cE '^ t *$' "$OUT")
+    SC_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    SC_CONTROL=$(grep -c "syscache negative control fired as intended" "$OUT")
+    # The one that carries the meaning.
+    SC_BASIC=$(grep -A2 'syscache_basic' "$OUT" | grep -cE '^ t')
+
+    if [ "$SC_FALSE" -eq 0 ] && [ "$SC_CONTROL" -ge 1 ] && \
+       [ "$SC_BASIC" -ge 1 ]; then
+        record PASS "$M" "syscache-api green ($SC_TRUE assertions)"
+    else
+        record FAIL "$M" "syscache-api: true=$SC_TRUE false=$SC_FALSE control=$SC_CONTROL basic=$SC_BASIC"
+        echo "      see $OUT"
+    fi
+
+    # --- extension-api: extension slots through the ABI -------------------
+    #
+    # The extension group: look up extension metadata. The assertion that
+    # matters is `extension_basic` — it proves that extension_oid,
+    # extension_installed, and extension_version all work together.
+    #
+    # ON_ERROR_STOP is off: check 2 (the negative control) raises by design.
+    echo "  [extension-api] extension slots against :$PORT"
+    OUT=/tmp/kwabi_extension_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f extension-api.sql postgres >"$OUT" 2>&1
+
+    EX_TRUE=$(grep -cE '^ t *$' "$OUT")
+    EX_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    EX_CONTROL=$(grep -c "extension negative control fired as intended" "$OUT")
+    # The one that carries the meaning.
+    EX_BASIC=$(grep -A2 'extension_basic' "$OUT" | grep -cE '^ t')
+
+    if [ "$EX_FALSE" -eq 0 ] && [ "$EX_CONTROL" -ge 1 ] && \
+       [ "$EX_BASIC" -ge 1 ]; then
+        record PASS "$M" "extension-api green ($EX_TRUE assertions)"
+    else
+        record FAIL "$M" "extension-api: true=$EX_TRUE false=$EX_FALSE control=$EX_CONTROL basic=$EX_BASIC"
+        echo "      see $OUT"
+    fi
+
+    # --- transaction-api: transaction slots through the ABI ----------------
+    #
+    # The transaction group: start, commit, abort, is_active, get_current_xid.
+    # The assertion that matters is `transaction_lifecycle` — it proves that
+    # transaction_start, transaction_is_active, transaction_get_current_xid,
+    # and transaction_commit all work together.
+    #
+    # ON_ERROR_STOP is off: check 5 (the negative control) raises by design.
+    echo "  [transaction-api] transaction slots against :$PORT"
+    OUT=/tmp/kwabi_transaction_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f transaction-api.sql postgres >"$OUT" 2>&1
+
+    TXN_TRUE=$(grep -cE '^ t *$' "$OUT")
+    TXN_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    TXN_CONTROL=$(grep -c "transaction negative control fired as intended" "$OUT")
+    # The one that carries the meaning.
+    TXN_LIFECYCLE=$(grep -A2 'transaction_lifecycle' "$OUT" | grep -cE '^ t')
+
+    if [ "$TXN_FALSE" -eq 0 ] && [ "$TXN_CONTROL" -ge 1 ] && \
+       [ "$TXN_LIFECYCLE" -ge 1 ]; then
+        record PASS "$M" "transaction-api green ($TXN_TRUE assertions)"
+    else
+        record FAIL "$M" "transaction-api: true=$TXN_TRUE false=$TXN_FALSE control=$TXN_CONTROL lifecycle=$TXN_LIFECYCLE"
+        echo "      see $OUT"
+    fi
+
+    # --- executor-api: executor slots through the ABI ----------------------
+    #
+    # The executor group: start, run, getnext, finish, end. The assertion that
+    # matters is `executor_lifecycle` — it proves that executor_start,
+    # executor_run, executor_getnext, executor_finish, and executor_end all
+    # work together.
+    #
+    # ON_ERROR_STOP is off: check 3 (the negative control) raises by design.
+    echo "  [executor-api] executor slots against :$PORT"
+    OUT=/tmp/kwabi_executor_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f executor-api.sql postgres >"$OUT" 2>&1
+
+    EXEC_TRUE=$(grep -cE '^ t *$' "$OUT")
+    EXEC_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    EXEC_CONTROL=$(grep -c "executor negative control fired as intended" "$OUT")
+    # The one that carries the meaning.
+    EXEC_LIFECYCLE=$(grep -A2 'executor_lifecycle' "$OUT" | grep -cE '^ t')
+
+    if [ "$EXEC_FALSE" -eq 0 ] && [ "$EXEC_CONTROL" -ge 1 ] && \
+       [ "$EXEC_LIFECYCLE" -ge 1 ]; then
+        record PASS "$M" "executor-api green ($EXEC_TRUE assertions)"
+    else
+        record FAIL "$M" "executor-api: true=$EXEC_TRUE false=$EXEC_FALSE control=$EXEC_CONTROL lifecycle=$EXEC_LIFECYCLE"
+        echo "      see $OUT"
+    fi
+
+    # --- explain-api: explain slots through the ABI ------------------------
+    #
+    # The explain group: explain_get_index_name. The assertion that matters is
+    # `index_name` — it proves that explain_get_index_name works through the ABI.
+    #
+    # ON_ERROR_STOP is off: check 3 (the negative control) raises by design.
+    echo "  [explain-api] explain slots against :$PORT"
+    OUT=/tmp/kwabi_explain_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f explain-api.sql postgres >"$OUT" 2>&1
+
+    EXP_TRUE=$(grep -cE '^ t *$' "$OUT")
+    EXP_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    EXP_CONTROL=$(grep -c "explain negative control fired as intended" "$OUT")
+    # The one that carries the meaning.
+    EXP_INDEX=$(grep -A2 'index_name' "$OUT" | grep -cE '^ t')
+
+    if [ "$EXP_FALSE" -eq 0 ] && [ "$EXP_CONTROL" -ge 1 ] && \
+       [ "$EXP_INDEX" -ge 1 ]; then
+        record PASS "$M" "explain-api green ($EXP_TRUE assertions)"
+    else
+        record FAIL "$M" "explain-api: true=$EXP_TRUE false=$EXP_FALSE control=$EXP_CONTROL index=$EXP_INDEX"
+        echo "      see $OUT"
+    fi
+
     # --- structured error channel: cross-version safety ------------------
     #
     # A v1 caller's smaller struct must not be overrun by a v2 writer. This is
