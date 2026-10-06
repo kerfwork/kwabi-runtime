@@ -281,6 +281,7 @@ _PG_init(void)
     init_group_extension();
     init_group_explain();
     init_group_transaction();
+    init_group_bgworker();
 
     /*
      * The catching direction is shim-owned for the same reason: it needs

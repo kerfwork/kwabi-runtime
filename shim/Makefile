@@ -343,6 +343,12 @@ extension-api: check install
 	  -v bundle='$(BUNDLE)' \
 	  -f extension-api.sql postgres
 
+# The bgworker group: register, check running, terminate background workers.
+bgworker-api: check install
+	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' \
+	  -f bgworker-api.sql postgres
+
 # The two-way control for fmgr-api check 13: builds a bundle with the
 # subtransaction removed and requires the partial write to SURVIVE there.
 # Without this, check 13 is a check that has only ever passed.

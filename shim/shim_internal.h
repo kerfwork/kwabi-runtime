@@ -144,5 +144,6 @@ extern void init_group_lock(void);
 extern void init_group_extension(void);
 extern void init_group_explain(void);
 extern void init_group_transaction(void);
+extern void init_group_bgworker(void);
 
 #endif /* SHIM_INTERNAL_H */

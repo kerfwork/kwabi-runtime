@@ -1074,6 +1074,34 @@ for M in "${MAJORS[@]}"; do
         echo "      see $OUT"
     fi
 
+    # --- bgworker-api: background worker slots through the ABI ------------
+    #
+    # The bgworker group: register, check running, terminate. The assertion
+    # that matters is `bgworker_lifecycle` — it proves that bgworker_register,
+    # bgworker_is_running, and bgworker_terminate all work together.
+    #
+    # ON_ERROR_STOP is off: check 2 (the negative control) raises by design.
+    echo "  [bgworker-api] background worker slots against :$PORT"
+    OUT=/tmp/kwabi_bgworker_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f bgworker-api.sql postgres >"$OUT" 2>&1
+
+    BG_TRUE=$(grep -cE '^ t *$' "$OUT")
+    BG_FALSE=$(grep -cE '^ f *$' "$OUT")
+    # The control must have RAISED. Its message is the proof it fired.
+    BG_CONTROL=$(grep -c "bgworker negative control fired as intended" "$OUT")
+    # The one that carries the meaning.
+    BG_LIFECYCLE=$(grep -A2 'bgworker_lifecycle' "$OUT" | grep -cE '^ t')
+
+    if [ "$BG_FALSE" -eq 0 ] && [ "$BG_CONTROL" -ge 1 ] && \
+       [ "$BG_LIFECYCLE" -ge 1 ]; then
+        record PASS "$M" "bgworker-api green ($BG_TRUE assertions)"
+    else
+        record FAIL "$M" "bgworker-api: true=$BG_TRUE false=$BG_FALSE control=$BG_CONTROL lifecycle=$BG_LIFECYCLE"
+        echo "      see $OUT"
+    fi
+
     # --- structured error channel: cross-version safety ------------------
     #
     # A v1 caller's smaller struct must not be overrun by a v2 writer. This is
