@@ -152,6 +152,138 @@ shim_slot_tupledesc(KwabiSlot slot)
     return s->tts_tupleDescriptor;
 }
 
+static BlockNumber
+shim_itempointer_get_block_number(ItemPointer pointer)
+{
+    if (pointer == NULL)
+        return 0;
+    return ItemPointerGetBlockNumber(pointer);
+}
+
+static BlockNumber
+shim_block_get_number(ItemPointer pointer)
+{
+    if (pointer == NULL)
+        return 0;
+    return ItemPointerGetBlockNumber(pointer);
+}
+
+static OffsetNumber
+shim_itempointer_get_offset_number(ItemPointer pointer)
+{
+    if (pointer == NULL)
+        return 0;
+    return ItemPointerGetOffsetNumber(pointer);
+}
+
+static OffsetNumber
+shim_block_get_offset(ItemPointer pointer)
+{
+    if (pointer == NULL)
+        return 0;
+    return ItemPointerGetOffsetNumber(pointer);
+}
+
+static bool
+shim_slot_is_active(Oid slot_oid)
+{
+    if (SPI_connect() != SPI_OK_CONNECT)
+        return false;
+
+    char query[256];
+    snprintf(query, sizeof(query),
+             "SELECT active FROM pg_replication_slots WHERE slot_name = 'slot_%u'",
+             slot_oid);
+
+    if (SPI_execute(query, true, 0) < 0) {
+        SPI_finish();
+        return false;
+    }
+
+    bool result = false;
+    if (SPI_processed > 0 && SPI_tuptable != NULL && SPI_tuptable->vals != NULL) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            result = DatumGetBool(d);
+    }
+
+    SPI_finish();
+    return result;
+}
+
+static int64
+shim_slot_get_lsn(Oid slot_oid)
+{
+    if (SPI_connect() != SPI_OK_CONNECT)
+        return -1;
+
+    char query[256];
+    snprintf(query, sizeof(query),
+             "SELECT restart_lsn FROM pg_replication_slots WHERE slot_name = 'slot_%u'",
+             slot_oid);
+
+    if (SPI_execute(query, true, 0) < 0) {
+        SPI_finish();
+        return -1;
+    }
+
+    int64 result = -1;
+    if (SPI_processed > 0 && SPI_tuptable != NULL && SPI_tuptable->vals != NULL) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            result = (int64) DatumGetInt64(d);
+    }
+
+    SPI_finish();
+    return result;
+}
+
+static int64
+shim_slot_get_catalog_xmin(Oid slot_oid)
+{
+    if (SPI_connect() != SPI_OK_CONNECT)
+        return -1;
+
+    char query[256];
+    snprintf(query, sizeof(query),
+             "SELECT catalog_xmin FROM pg_replication_slots WHERE slot_name = 'slot_%u'",
+             slot_oid);
+
+    if (SPI_execute(query, true, 0) < 0) {
+        SPI_finish();
+        return -1;
+    }
+
+    int64 result = -1;
+    if (SPI_processed > 0 && SPI_tuptable != NULL && SPI_tuptable->vals != NULL) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            result = (int64) DatumGetInt64(d);
+    }
+
+    SPI_finish();
+    return result;
+}
+
+static bool
+shim_itempointer_is_valid(ItemPointer pointer)
+{
+    if (pointer == NULL)
+        return false;
+    return ItemPointerIsValid(pointer);
+}
+
+static bool
+shim_block_is_valid(ItemPointer pointer)
+{
+    if (pointer == NULL)
+        return false;
+    return ItemPointerIsValid(pointer);
+}
+
 void
 init_group_tuple(void)
 {
@@ -168,4 +300,13 @@ init_group_tuple(void)
     shim_table.slot_isnull = shim_slot_isnull;
     shim_table.slot_getattr = shim_slot_getattr;
     shim_table.slot_tupledesc = shim_slot_tupledesc;
+    shim_table.slot_is_active = shim_slot_is_active;
+    shim_table.slot_get_lsn = shim_slot_get_lsn;
+    shim_table.slot_get_catalog_xmin = shim_slot_get_catalog_xmin;
+    shim_table.block_get_number = shim_block_get_number;
+    shim_table.itempointer_get_block_number = shim_itempointer_get_block_number;
+    shim_table.itempointer_get_offset_number = shim_itempointer_get_offset_number;
+    shim_table.itempointer_is_valid = shim_itempointer_is_valid;
+    shim_table.block_get_offset = shim_block_get_offset;
+    shim_table.block_is_valid = shim_block_is_valid;
 }

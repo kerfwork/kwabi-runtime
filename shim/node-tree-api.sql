@@ -30,10 +30,21 @@ DROP FUNCTION IF EXISTS kwabi_query_command_type(text);
 DROP FUNCTION IF EXISTS kwabi_query_rtable_length(text);
 DROP FUNCTION IF EXISTS kwabi_query_target_list_length(text);
 DROP FUNCTION IF EXISTS kwabi_query_returning_list_length(text);
+DROP FUNCTION IF EXISTS kwabi_query_sort_clause_length(text);
+DROP FUNCTION IF EXISTS kwabi_query_group_clause_length(text);
 DROP FUNCTION IF EXISTS kwabi_query_has_for_update(text);
 DROP FUNCTION IF EXISTS kwabi_query_has_row_security(text);
+DROP FUNCTION IF EXISTS kwabi_query_jointree(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_is_utility(text);
+DROP FUNCTION IF EXISTS kwabi_planned_stmt_has_modifying_cte(text);
+DROP FUNCTION IF EXISTS kwabi_planned_stmt_has_returning(text);
+DROP FUNCTION IF EXISTS kwabi_planned_stmt_plan_tree(text);
+DROP FUNCTION IF EXISTS kwabi_query_limit_count(text);
+DROP FUNCTION IF EXISTS kwabi_query_limit_offset(text);
+DROP FUNCTION IF EXISTS kwabi_planned_stmt_rtable_length(sql text);
 DROP FUNCTION IF EXISTS kwabi_node_control();
+DROP FUNCTION IF EXISTS kwabi_slru_create_test();
+DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_changes_test();
 
 CREATE FUNCTION kwabi_node_type(sql text)
     RETURNS int4 AS :'bundle','kwabi_node_type' LANGUAGE C;
@@ -51,14 +62,38 @@ CREATE FUNCTION kwabi_query_target_list_length(sql text)
     RETURNS int4 AS :'bundle','kwabi_query_target_list_length' LANGUAGE C;
 CREATE FUNCTION kwabi_query_returning_list_length(sql text)
     RETURNS int4 AS :'bundle','kwabi_query_returning_list_length' LANGUAGE C;
+CREATE FUNCTION kwabi_query_sort_clause_length(sql text)
+    RETURNS int4 AS :'bundle','kwabi_query_sort_clause_length' LANGUAGE C;
+CREATE FUNCTION kwabi_query_group_clause_length(sql text)
+    RETURNS int4 AS :'bundle','kwabi_query_group_clause_length' LANGUAGE C;
 CREATE FUNCTION kwabi_query_has_for_update(sql text)
     RETURNS bool AS :'bundle','kwabi_query_has_for_update' LANGUAGE C;
 CREATE FUNCTION kwabi_query_has_row_security(sql text)
     RETURNS bool AS :'bundle','kwabi_query_has_row_security' LANGUAGE C;
+CREATE FUNCTION kwabi_query_jointree(sql text)
+    RETURNS int4 AS :'bundle','kwabi_query_jointree' LANGUAGE C;
 CREATE FUNCTION kwabi_planned_stmt_is_utility(sql text)
     RETURNS bool AS :'bundle','kwabi_planned_stmt_is_utility' LANGUAGE C;
+CREATE FUNCTION kwabi_planned_stmt_has_modifying_cte(sql text)
+    RETURNS bool AS :'bundle','kwabi_planned_stmt_has_modifying_cte' LANGUAGE C;
+CREATE FUNCTION kwabi_planned_stmt_has_returning(sql text)
+    RETURNS bool AS :'bundle','kwabi_planned_stmt_has_returning' LANGUAGE C;
+CREATE FUNCTION kwabi_planned_stmt_plan_tree(sql text)
+    RETURNS int4 AS :'bundle','kwabi_planned_stmt_plan_tree' LANGUAGE C;
+CREATE FUNCTION kwabi_query_limit_count(sql text)
+    RETURNS int4 AS :'bundle','kwabi_query_limit_count' LANGUAGE C;
+CREATE FUNCTION kwabi_query_limit_offset(sql text)
+    RETURNS int4 AS :'bundle','kwabi_query_limit_offset' LANGUAGE C;
+CREATE FUNCTION kwabi_planned_stmt_result_relations_length(sql text)
+    RETURNS int4 AS :'bundle','kwabi_planned_stmt_result_relations_length' LANGUAGE C;
+CREATE FUNCTION kwabi_planned_stmt_rtable_length(sql text)
+    RETURNS int4 AS :'bundle','kwabi_planned_stmt_rtable_length' LANGUAGE C;
 CREATE FUNCTION kwabi_node_control()
     RETURNS bool AS :'bundle','kwabi_node_control' LANGUAGE C;
+CREATE FUNCTION kwabi_slru_create_test()
+    RETURNS bool AS :'bundle','kwabi_slru_create_test' LANGUAGE C;
+CREATE FUNCTION kwabi_reorderbuffer_get_changes_test()
+    RETURNS int4 AS :'bundle','kwabi_reorderbuffer_get_changes_test' LANGUAGE C;
 
 \echo ''
 \echo '=== 1. parse a SELECT and get its node type ==='
@@ -101,6 +136,20 @@ SELECT kwabi_query_target_list_length('SELECT 1') = 1 AS query_target_list_lengt
 SELECT kwabi_query_returning_list_length('SELECT 1') = 0 AS returning_list_length;
 
 \echo ''
+\echo '=== 8b. query sort clause length ==='
+\echo '   SELECT 1 must have an empty sort clause (no ORDER BY)'
+SELECT kwabi_query_sort_clause_length('SELECT 1') = 0 AS sort_clause_length_empty;
+\echo '   SELECT 1 ORDER BY 1 must have a sort clause of length 1'
+SELECT kwabi_query_sort_clause_length('SELECT 1 ORDER BY 1') = 1 AS sort_clause_length_one;
+
+\echo ''
+\echo '=== 8c. query group clause length ==='
+\echo '   SELECT 1 must have an empty group clause (no GROUP BY)'
+SELECT kwabi_query_group_clause_length('SELECT 1') = 0 AS group_clause_length_empty;
+\echo '   SELECT 1 GROUP BY 1 must have a group clause of length 1'
+SELECT kwabi_query_group_clause_length('SELECT 1 GROUP BY 1') = 1 AS group_clause_length_one;
+
+\echo ''
 \echo '=== 9. query has for update ==='
 \echo '   SELECT 1 must NOT have FOR UPDATE'
 SELECT kwabi_query_has_for_update('SELECT 1') = false AS no_for_update;
@@ -111,19 +160,71 @@ SELECT kwabi_query_has_for_update('SELECT 1') = false AS no_for_update;
 SELECT kwabi_query_has_row_security('SELECT 1') = false AS no_row_security;
 
 \echo ''
+\echo '=== 10b. query jointree ==='
+\echo '   SELECT 1 must have a jointree of type FromExpr (KWABI_NODE_FROM_EXPR = 38)'
+SELECT kwabi_query_jointree('SELECT 1') = 38 AS jointree_from_expr;
+
+\echo ''
 \echo '=== 11. planned stmt is utility ==='
 \echo '   SELECT 1 must NOT be a utility statement'
 SELECT kwabi_planned_stmt_is_utility('SELECT 1') = false AS not_utility;
 
 \echo ''
-\echo '=== 12. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='
+\echo '=== 12. planned stmt plan tree ==='
+\echo '   SELECT 1 parses to a Query, not a PlannedStmt, so plan tree is NULL (0)'
+SELECT kwabi_planned_stmt_plan_tree('SELECT 1') = 0 AS plan_tree_null_for_query;
+
+\echo ''
+\echo '=== 12b. query limit count ==='
+\echo '   SELECT 1 has no LIMIT, so limit count is NULL (0)'
+SELECT kwabi_query_limit_count('SELECT 1') = 0 AS limit_count_null;
+
+\echo ''
+\echo '=== 12c. query limit offset ==='
+\echo '   SELECT 1 has no OFFSET, so limit offset is NULL (0)'
+SELECT kwabi_query_limit_offset('SELECT 1') = 0 AS limit_offset_null;
+\echo '   SELECT 1 LIMIT 5 OFFSET 3 must have an OFFSET node (KWABI_NODE_CONST = 10)'
+SELECT kwabi_query_limit_offset('SELECT 1 LIMIT 5 OFFSET 3') = 10 AS limit_offset_const;
+
+\echo ''
+\echo '=== 13. planned stmt result relations length ==='
+\echo '   SELECT 1 must have an empty resultRelations list'
+SELECT kwabi_planned_stmt_result_relations_length('SELECT 1') = 0 AS result_relations_length;
+
+\echo ''
+\echo '=== 13b. planned stmt rtable length ==='
+\echo '   SELECT 1 parses to a Query, not a PlannedStmt, so rtable is NULL (0)'
+SELECT kwabi_planned_stmt_rtable_length('SELECT 1') = 0 AS rtable_length_for_query;
+
+\echo ''
+\echo '=== 14. planned stmt has modifying CTE ==='
+\echo '   SELECT 1 must NOT have a modifying CTE'
+SELECT kwabi_planned_stmt_has_modifying_cte('SELECT 1') = false AS no_modifying_cte;
+
+\echo ''
+\echo '=== 15. planned stmt has returning ==='
+\echo '   SELECT 1 parses to a Query, not a PlannedStmt, so has_returning is false'
+SELECT kwabi_planned_stmt_has_returning('SELECT 1') = false AS no_returning_for_query;
+
+\echo ''
+\echo '=== 16. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='
 \echo '   (must ERROR with "fired as intended"; returning a row means every'
 \echo '    equality check above is vacuous)'
 SELECT kwabi_node_control() AS control_should_not_return;
 
 \echo ''
-\echo '=== 13. the backend survived all of the above ==='
+\echo '=== 14. the backend survived all of the above ==='
 SELECT kwabi_node_type('SELECT 42') = 1 AS after_control;
+
+\echo ''
+\echo '=== 15. reorderbuffer_get_changes ==='
+\echo '   reorderbuffer_get_changes(NULL, InvalidTransactionId) must return 0'
+SELECT kwabi_reorderbuffer_get_changes_test() = 0 AS reorderbuffer_get_changes;
+
+\echo ''
+\echo '=== 16. slru_create ==='
+\echo '   slru_create must create an SLRU visible in pg_stat_slru'
+SELECT kwabi_slru_create_test() AS slru_create;
 
 \echo ''
 \echo '=== node-tree-api tests complete ==='

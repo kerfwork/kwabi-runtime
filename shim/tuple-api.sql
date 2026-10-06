@@ -25,7 +25,16 @@ LOAD :'bundle';
 DROP FUNCTION IF EXISTS kwabi_tuple_test();
 DROP FUNCTION IF EXISTS kwabi_heap_tuple_test();
 DROP FUNCTION IF EXISTS kwabi_slot_test();
+DROP FUNCTION IF EXISTS kwabi_slot_is_active_test();
+DROP FUNCTION IF EXISTS kwabi_slot_get_lsn_test();
+DROP FUNCTION IF EXISTS kwabi_slot_get_catalog_xmin_test();
+DROP FUNCTION IF EXISTS kwabi_itempointer_get_block_number_test();
 DROP FUNCTION IF EXISTS kwabi_tuple_control();
+DROP FUNCTION IF EXISTS kwabi_itempointer_is_valid_test();
+DROP FUNCTION IF EXISTS kwabi_itempointer_get_offset_number_test();
+DROP FUNCTION IF EXISTS kwabi_block_get_number_test();
+DROP FUNCTION IF EXISTS kwabi_block_is_valid_test();
+DROP FUNCTION IF EXISTS kwabi_block_get_offset_test();
 
 CREATE FUNCTION kwabi_tuple_test()
     RETURNS bool AS :'bundle','kwabi_tuple_test' LANGUAGE C;
@@ -33,6 +42,24 @@ CREATE FUNCTION kwabi_heap_tuple_test()
     RETURNS bool AS :'bundle','kwabi_heap_tuple_test' LANGUAGE C;
 CREATE FUNCTION kwabi_slot_test()
     RETURNS bool AS :'bundle','kwabi_slot_test' LANGUAGE C;
+CREATE FUNCTION kwabi_slot_is_active_test()
+    RETURNS bool AS :'bundle','kwabi_slot_is_active_test' LANGUAGE C;
+CREATE FUNCTION kwabi_slot_get_lsn_test()
+    RETURNS int8 AS :'bundle','kwabi_slot_get_lsn_test' LANGUAGE C;
+CREATE FUNCTION kwabi_slot_get_catalog_xmin_test()
+    RETURNS int8 AS :'bundle','kwabi_slot_get_catalog_xmin_test' LANGUAGE C;
+CREATE FUNCTION kwabi_itempointer_get_block_number_test()
+    RETURNS bool AS :'bundle','kwabi_itempointer_get_block_number_test' LANGUAGE C;
+CREATE FUNCTION kwabi_itempointer_is_valid_test()
+    RETURNS bool AS :'bundle','kwabi_itempointer_is_valid_test' LANGUAGE C;
+CREATE FUNCTION kwabi_itempointer_get_offset_number_test()
+    RETURNS bool AS :'bundle','kwabi_itempointer_get_offset_number_test' LANGUAGE C;
+CREATE FUNCTION kwabi_block_get_number_test()
+    RETURNS bool AS :'bundle','kwabi_block_get_number_test' LANGUAGE C;
+CREATE FUNCTION kwabi_block_get_offset_test()
+    RETURNS bool AS :'bundle','kwabi_block_get_offset_test' LANGUAGE C;
+CREATE FUNCTION kwabi_block_is_valid_test()
+    RETURNS bool AS :'bundle','kwabi_block_is_valid_test' LANGUAGE C;
 CREATE FUNCTION kwabi_tuple_control()
     RETURNS bool AS :'bundle','kwabi_tuple_control' LANGUAGE C;
 
@@ -52,6 +79,42 @@ SELECT kwabi_heap_tuple_test() AS heap_tuple_accessors;
 \echo '=== 3. slot accessors ==='
 \echo '   slot_isnull, slot_getattr, slot_tupledesc'
 SELECT kwabi_slot_test() AS slot_accessors;
+
+\echo ''
+\echo '=== 3b. slot_is_active ==='
+SELECT kwabi_slot_is_active_test() AS slot_is_active;
+
+\echo ''
+\echo '=== 3c. slot_get_lsn ==='
+SELECT kwabi_slot_get_lsn_test() AS slot_get_lsn;
+
+\echo ''
+\echo '=== 3d. slot_get_catalog_xmin ==='
+SELECT kwabi_slot_get_catalog_xmin_test() AS slot_get_catalog_xmin;
+
+\echo ''
+\echo '=== 3e. itempointer_get_block_number ==='
+SELECT kwabi_itempointer_get_block_number_test() AS itempointer_get_block_number;
+
+\echo ''
+\echo '=== 3f. itempointer_is_valid ==='
+SELECT kwabi_itempointer_is_valid_test() AS itempointer_is_valid;
+
+\echo ''
+\echo '=== 3g. itempointer_get_offset_number ==='
+SELECT kwabi_itempointer_get_offset_number_test() AS itempointer_get_offset_number;
+
+\echo ''
+\echo '=== 3h. block_get_number ==='
+SELECT kwabi_block_get_number_test() AS block_get_number;
+
+\echo ''
+\echo '=== 3i. block_get_offset ==='
+SELECT kwabi_block_get_offset_test() AS block_get_offset;
+
+\echo ''
+\echo '=== 3i. block_is_valid ==='
+SELECT kwabi_block_is_valid_test() AS block_is_valid;
 
 \echo ''
 \echo '=== 4. the whole group works inside a transaction ==='
