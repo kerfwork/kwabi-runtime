@@ -50,6 +50,12 @@ build:
 	@echo "built $(MODULE)"
 
 SUDO ?=
+# Auto-detect sudo when PKGLIBDIR is not writable (e.g. GitHub runners).
+ifeq ($(SUDO),)
+  ifneq ($(shell test -w $(PKGLIBDIR) 2>/dev/null && echo yes),)
+    SUDO := sudo
+  endif
+endif
 
 install: build
 	$(SUDO) install -m 755 $(MODULE) $(PKGLIBDIR)/$(MODULE)

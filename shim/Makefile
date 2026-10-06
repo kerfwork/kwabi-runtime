@@ -187,6 +187,12 @@ check: canary
 	 fi
 
 SUDO ?=
+# Auto-detect sudo when PKGLIBDIR is not writable (e.g. GitHub runners).
+ifeq ($(SUDO),)
+  ifneq ($(shell test -w $(PKGLIBDIR) 2>/dev/null && echo yes),)
+    SUDO := sudo
+  endif
+endif
 
 install: build canary
 	$(SUDO) install -m 755 $(BUNDLE) $(PKGLIBDIR)/$(BUNDLE)
@@ -214,6 +220,7 @@ GUARDED := libguarded_canary.$(DLSUFFIX)
 guard-build:
 	cd $(RUNTIME_DIR)/canary/guarded && cargo build --release
 	$(SUDO) install -m 755 $(RUNTIME_DIR)/canary/guarded/target/release/$(GUARDED) $(PKGLIBDIR)/$(GUARDED)
+.PHONY: guard-build
 
 guard-test: check install guard-build
 	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
