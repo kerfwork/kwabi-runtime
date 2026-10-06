@@ -95,7 +95,13 @@ pub struct KwabiV1 {
     // error firewall forbids a Rust frame between a PG_TRY and a raising call).
     pub spi_execute: Option<unsafe extern "C" fn(*const c_char, bool, i32) -> *mut KwabiSPIResult>,
     pub spi_execute_plan: Option<
-        unsafe extern "C" fn(*mut KwabiSPIPlan, *mut u64, *const c_char, bool, i32) -> *mut KwabiSPIResult,
+        unsafe extern "C" fn(
+            *mut KwabiSPIPlan,
+            *mut u64,
+            *const c_char,
+            bool,
+            i32,
+        ) -> *mut KwabiSPIResult,
     >,
     pub spi_free_result: Option<unsafe extern "C" fn(*mut KwabiSPIResult)>,
     pub spi_result_ntuples: Option<unsafe extern "C" fn(*mut KwabiSPIResult) -> i32>,
@@ -250,7 +256,12 @@ pub struct KwabiV1 {
     pub tuple_attnum: extern "C" fn(*mut std::ffi::c_void, *const c_char) -> i32,
     pub heap_tuple_getattr:
         extern "C" fn(*mut std::ffi::c_void, i32, *mut std::ffi::c_void, *mut bool) -> u64,
-    pub heap_tuple_setattr: extern "C" fn(*mut std::ffi::c_void, i32, u64, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+    pub heap_tuple_setattr: extern "C" fn(
+        *mut std::ffi::c_void,
+        i32,
+        u64,
+        *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void,
     pub heap_tuple_tableoid: extern "C" fn(*mut std::ffi::c_void) -> u32,
     pub heap_tuple_tid: extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void,
     pub slot_isnull: extern "C" fn(*mut std::ffi::c_void, i32) -> bool,
@@ -384,7 +395,8 @@ pub struct KwabiV1 {
     >,
     pub error_get: Option<unsafe extern "C" fn(*mut guarded::KwabiErrorAbi)>,
     pub capabilities: Option<unsafe extern "C" fn() -> u64>,
-    pub memory_context_create: Option<unsafe extern "C" fn(*const c_char) -> *mut KwabiMemoryContext>,
+    pub memory_context_create:
+        Option<unsafe extern "C" fn(*const c_char) -> *mut KwabiMemoryContext>,
 }
 
 // Opaque handle types

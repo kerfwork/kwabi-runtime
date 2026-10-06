@@ -248,9 +248,7 @@ pub unsafe fn capabilities_of(t: *const KwabiV1, pg_major: u32) -> u64 {
     // `try_body` has no way to hand a structured error to anyone, so claiming
     // it is a lie — and a lie an extension would rely on.
     let can_deliver = t.error_get.is_some() || t.try_body.is_some();
-    if can_deliver
-        && std::mem::size_of::<abi::KwabiError>() >= abi::KWABI_ERR_STRUCTURED_MIN
-    {
+    if can_deliver && std::mem::size_of::<abi::KwabiError>() >= abi::KWABI_ERR_STRUCTURED_MIN {
         caps |= abi::KWABI_CAP_STRUCTURED_ERRORS;
     }
 
@@ -372,7 +370,10 @@ pub unsafe extern "C" fn kwabi_runtime_init(native: *const KwabiNative) -> *cons
 /// This is the entry point an extension loader calls.
 #[no_mangle]
 pub extern "C" fn kwabi_get_api() -> *const KwabiV1 {
-    STABLE.get().map(|t| t as *const KwabiV1).unwrap_or(ptr::null())
+    STABLE
+        .get()
+        .map(|t| t as *const KwabiV1)
+        .unwrap_or(ptr::null())
 }
 
 /// Record an error in the runtime's own state.

@@ -49,8 +49,10 @@ build:
 	   -o $(MODULE) errsize.c
 	@echo "built $(MODULE)"
 
+SUDO ?=
+
 install: build
-	install -m 755 $(MODULE) $(PKGLIBDIR)/$(MODULE)
+	$(SUDO) install -m 755 $(MODULE) $(PKGLIBDIR)/$(MODULE)
 
 test: install
 	$(PSQL) -p $(PGPORT) -v ON_ERROR_STOP=1 \

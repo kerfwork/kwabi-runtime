@@ -215,7 +215,11 @@ fn table_layout_is_stable() {
     // Appended slots move this number. That is the intended workflow for an
     // append-only ABI, and this assertion is what makes the change deliberate:
     // it cannot happen by accident.
-    assert_eq!(KwabiV1::FIELD_COUNT, 205, "field count changed — kwabi.h edited?");
+    assert_eq!(
+        KwabiV1::FIELD_COUNT,
+        205,
+        "field count changed — kwabi.h edited?"
+    );
 }
 
 /// The SDK's hand-written mirror must match the header, field for field.
@@ -330,7 +334,10 @@ fn extension_reaches_stub_postgres_through_the_table() {
     );
 
     unsafe { ext.free(p) };
-    assert!(FREE_COUNT.load(Ordering::SeqCst) >= 1, "pfree must reach the stub");
+    assert!(
+        FREE_COUNT.load(Ordering::SeqCst) >= 1,
+        "pfree must reach the stub"
+    );
 }
 
 #[test]
@@ -345,8 +352,14 @@ fn unimplemented_slots_are_null_not_garbage() {
     assert!(t.error_message.is_some());
     assert!(t.fmgr_info.is_none(), "fmgr is not wired in the skeleton");
     assert!(t.spi_execute.is_none(), "SPI is not wired in the skeleton");
-    assert!(t.table_am_get.is_none(), "table AM is not wired in the skeleton");
-    assert!(t.node_type.is_none(), "node IR is not wired in the skeleton");
+    assert!(
+        t.table_am_get.is_none(),
+        "table AM is not wired in the skeleton"
+    );
+    assert!(
+        t.node_type.is_none(),
+        "node IR is not wired in the skeleton"
+    );
 }
 
 #[test]
@@ -357,7 +370,9 @@ fn error_firewall_keeps_runtime_errors_out_of_postgres() {
     // Baseline: the runtime defers to the stub PostgreSQL.
     unsafe { ext.error_clear() };
     assert_eq!(
-        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }.to_str().unwrap(),
+        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }
+            .to_str()
+            .unwrap(),
         "stub: postgres error"
     );
 
@@ -367,7 +382,9 @@ fn error_firewall_keeps_runtime_errors_out_of_postgres() {
     assert!(raised);
     assert_eq!(unsafe { ext.error_code() }, 42);
     assert_eq!(
-        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }.to_str().unwrap(),
+        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }
+            .to_str()
+            .unwrap(),
         "kwabi: bad handle"
     );
 
@@ -375,7 +392,9 @@ fn error_firewall_keeps_runtime_errors_out_of_postgres() {
     unsafe { ext.error_clear() };
     assert_eq!(unsafe { ext.error_code() }, 0);
     assert_eq!(
-        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }.to_str().unwrap(),
+        unsafe { std::ffi::CStr::from_ptr(ext.error_message()) }
+            .to_str()
+            .unwrap(),
         "stub: postgres error"
     );
 }

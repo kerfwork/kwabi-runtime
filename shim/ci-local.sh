@@ -226,6 +226,7 @@ SUDO=""
 if [ ! -w "$(dirname "$GUARDED_CANARY")" ]; then
     SUDO="sudo"
 fi
+export SUDO
 $SUDO make -s guard-build >/dev/null 2>&1
 if [ ! -f "$GUARDED_CANARY" ]; then
     record FAIL canary "guarded canary was not built"
@@ -308,6 +309,7 @@ for M in "${MAJORS[@]}"; do
     if [ ! -w "$PKGLIB" ]; then
         SUDO="sudo"
     fi
+    export SUDO
     if ! $SUDO make -s install PG="$M" >/dev/null 2>&1; then
         record FAIL "$M" "install into $PKGLIB failed"
         continue

@@ -186,9 +186,11 @@ check: canary
 	   echo "FAIL: canary references PostgreSQL symbols:"; echo "$$BAD"; exit 1; \
 	 fi
 
+SUDO ?=
+
 install: build canary
-	install -m 755 $(BUNDLE) $(PKGLIBDIR)/$(BUNDLE)
-	install -m 755 $(RUNTIME_DIR)/canary/$(CANARY) $(PKGLIBDIR)/$(CANARY)
+	$(SUDO) install -m 755 $(BUNDLE) $(PKGLIBDIR)/$(BUNDLE)
+	$(SUDO) install -m 755 $(RUNTIME_DIR)/canary/$(CANARY) $(PKGLIBDIR)/$(CANARY)
 	@echo "installed both into $(PKGLIBDIR)"
 
 uninstall:
@@ -211,7 +213,7 @@ GUARDED := libguarded_canary.$(DLSUFFIX)
 
 guard-build:
 	cd $(RUNTIME_DIR)/canary/guarded && cargo build --release
-	install -m 755 $(RUNTIME_DIR)/canary/guarded/target/release/$(GUARDED) $(PKGLIBDIR)/$(GUARDED)
+	$(SUDO) install -m 755 $(RUNTIME_DIR)/canary/guarded/target/release/$(GUARDED) $(PKGLIBDIR)/$(GUARDED)
 
 guard-test: check install guard-build
 	$(PSQL) -h $(PSOCK) -p $(PGPORT) -v ON_ERROR_STOP=0 \
