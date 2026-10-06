@@ -187,7 +187,7 @@ if [ -z "$KWABI_HDR" ]; then
 fi
 
 echo "[core] src/abi.rs matches kwabi.h"
-if [ -n "$KWABI_HDR" ] && (cd .. && python3 gen_kwabi_struct.py "$KWABI_HDR" > /tmp/kwabi_abi_check.rs \
+if [ -n "$KWABI_HDR" ] && (cd .. && python3 gen_kwabi_struct.py "$KWABI_HDR" | rustfmt --edition 2021 > /tmp/kwabi_abi_check.rs \
       && diff -q /tmp/kwabi_abi_check.rs src/abi.rs >/dev/null); then
     record PASS core "src/abi.rs is current"
 else
