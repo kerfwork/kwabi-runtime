@@ -45,6 +45,16 @@ DROP FUNCTION IF EXISTS kwabi_planned_stmt_rtable_length(sql text);
 DROP FUNCTION IF EXISTS kwabi_node_control();
 DROP FUNCTION IF EXISTS kwabi_slru_create_test();
 DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_changes_test();
+DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_lsn_test();
+DROP FUNCTION IF EXISTS kwabi_logical_decoding_begin_test();
+DROP FUNCTION IF EXISTS kwabi_logical_decoding_end_test();
+DROP FUNCTION IF EXISTS kwabi_slru_read_test();
+DROP FUNCTION IF EXISTS kwabi_slru_write_test();
+DROP FUNCTION IF EXISTS kwabi_sequence_nextval_test();
+DROP FUNCTION IF EXISTS kwabi_trigger_get_test();
+DROP FUNCTION IF EXISTS kwabi_trigger_desc_test();
+DROP FUNCTION IF EXISTS kwabi_sequence_currval_test();
+DROP FUNCTION IF EXISTS kwabi_sequence_setval_test();
 
 CREATE FUNCTION kwabi_node_type(sql text)
     RETURNS int4 AS :'bundle','kwabi_node_type' LANGUAGE C;
@@ -94,6 +104,26 @@ CREATE FUNCTION kwabi_slru_create_test()
     RETURNS bool AS :'bundle','kwabi_slru_create_test' LANGUAGE C;
 CREATE FUNCTION kwabi_reorderbuffer_get_changes_test()
     RETURNS int4 AS :'bundle','kwabi_reorderbuffer_get_changes_test' LANGUAGE C;
+CREATE FUNCTION kwabi_reorderbuffer_get_lsn_test()
+    RETURNS int4 AS :'bundle','kwabi_reorderbuffer_get_lsn_test' LANGUAGE C;
+CREATE FUNCTION kwabi_logical_decoding_begin_test()
+    RETURNS bool AS :'bundle','kwabi_logical_decoding_begin_test' LANGUAGE C;
+CREATE FUNCTION kwabi_logical_decoding_end_test()
+    RETURNS bool AS :'bundle','kwabi_logical_decoding_end_test' LANGUAGE C;
+CREATE FUNCTION kwabi_slru_read_test()
+    RETURNS bool AS :'bundle','kwabi_slru_read_test' LANGUAGE C;
+CREATE FUNCTION kwabi_slru_write_test()
+    RETURNS bool AS :'bundle','kwabi_slru_write_test' LANGUAGE C;
+CREATE FUNCTION kwabi_sequence_nextval_test()
+    RETURNS int8 AS :'bundle','kwabi_sequence_nextval_test' LANGUAGE C;
+CREATE FUNCTION kwabi_sequence_currval_test()
+    RETURNS int8 AS :'bundle','kwabi_sequence_currval_test' LANGUAGE C;
+CREATE FUNCTION kwabi_sequence_setval_test()
+    RETURNS int8 AS :'bundle','kwabi_sequence_setval_test' LANGUAGE C;
+CREATE FUNCTION kwabi_trigger_get_test()
+    RETURNS bool AS :'bundle','kwabi_trigger_get_test' LANGUAGE C;
+CREATE FUNCTION kwabi_trigger_desc_test()
+    RETURNS bool AS :'bundle','kwabi_trigger_desc_test' LANGUAGE C;
 
 \echo ''
 \echo '=== 1. parse a SELECT and get its node type ==='
@@ -222,9 +252,59 @@ SELECT kwabi_node_type('SELECT 42') = 1 AS after_control;
 SELECT kwabi_reorderbuffer_get_changes_test() = 0 AS reorderbuffer_get_changes;
 
 \echo ''
+\echo '=== 15b. reorderbuffer_get_lsn ==='
+\echo '   reorderbuffer_get_lsn(NULL) must return 0'
+SELECT kwabi_reorderbuffer_get_lsn_test() = 0 AS reorderbuffer_get_lsn;
+
+\echo ''
 \echo '=== 16. slru_create ==='
 \echo '   slru_create must create an SLRU visible in pg_stat_slru'
 SELECT kwabi_slru_create_test() AS slru_create;
+
+\echo ''
+\echo '=== 17. logical_decoding_begin ==='
+\echo '   logical_decoding_begin(InvalidOid, 0) must return NULL'
+SELECT kwabi_logical_decoding_begin_test() AS logical_decoding_begin;
+
+\echo ''
+\echo '=== 18. logical_decoding_end ==='
+\echo '   logical_decoding_end(NULL) must not crash'
+SELECT kwabi_logical_decoding_end_test() AS logical_decoding_end;
+
+\echo ''
+\echo '=== 19. slru_read ==='
+\echo '   slru_read must be callable and not crash'
+SELECT kwabi_slru_read_test() AS slru_read;
+
+\echo ''
+\echo '=== 20. slru_write ==='
+\echo '   slru_write must be callable and not crash'
+SELECT kwabi_slru_write_test() AS slru_write;
+
+\echo ''
+\echo '=== 21. sequence_nextval ==='
+\echo '   sequence_nextval must return 1 for a new sequence'
+SELECT kwabi_sequence_nextval_test() = 1 AS sequence_nextval;
+
+\echo ''
+\echo '=== 21b. sequence_currval ==='
+\echo '   sequence_currval must return the same value as sequence_nextval'
+SELECT kwabi_sequence_currval_test() = 1 AS sequence_currval;
+
+\echo ''
+\echo '=== 22. sequence_setval ==='
+\echo '   sequence_setval must set the sequence value to 42'
+SELECT kwabi_sequence_setval_test() = 42 AS sequence_setval;
+
+\echo ''
+\echo '=== 23. trigger_get ==='
+\echo '   trigger_get must return a valid trigger at index 0'
+SELECT kwabi_trigger_get_test() AS trigger_get;
+
+\echo ''
+\echo '=== 24. trigger_desc ==='
+\echo '   trigger_desc must return a non-NULL TriggerDesc for a table with a trigger'
+SELECT kwabi_trigger_desc_test() AS trigger_desc;
 
 \echo ''
 \echo '=== node-tree-api tests complete ==='

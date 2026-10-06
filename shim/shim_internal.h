@@ -140,6 +140,8 @@ extern void init_group_buffer(void);
 extern void init_group_syscache(void);
 extern void init_group_lwlock(void);
 extern void init_group_node(void);
+extern void init_group_trigger(void);
+extern void init_group_tableam(void);
 extern void init_group_lock(void);
 extern void init_group_extension(void);
 extern void init_group_explain(void);

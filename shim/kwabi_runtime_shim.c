@@ -277,6 +277,8 @@ _PG_init(void)
     init_group_syscache();
     init_group_lwlock();
     init_group_node();
+    init_group_trigger();
+    init_group_tableam();
     init_group_lock();
     init_group_extension();
     init_group_explain();

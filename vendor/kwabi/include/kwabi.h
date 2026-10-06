@@ -831,7 +831,7 @@ typedef struct KwabiV1 {
     void (*vacuum_analyze_rel)(Relation rel, VacuumParams params, BufferAccessStrategy bstrategy);
 
     /* ---- Triggers ---- */
-    TriggerDesc (*trigger_desc)(Relation rel);
+    TriggerDesc *(*trigger_desc)(Oid relid);
     int (*trigger_count)(TriggerDesc desc);
     Trigger (*trigger_get)(TriggerDesc desc, int index);
 
