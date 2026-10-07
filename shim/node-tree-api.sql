@@ -44,6 +44,7 @@ DROP FUNCTION IF EXISTS kwabi_query_limit_offset(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_rtable_length(sql text);
 DROP FUNCTION IF EXISTS kwabi_planner_estimate_rows_test();
 DROP FUNCTION IF EXISTS kwabi_planner_estimate_cost_test(sql text);
+DROP FUNCTION IF EXISTS kwabi_walsender_is_connected_test();
 DROP FUNCTION IF EXISTS kwabi_node_control();
 DROP FUNCTION IF EXISTS kwabi_planner_info_test(text);
 DROP FUNCTION IF EXISTS kwabi_slru_create_test();
@@ -56,6 +57,8 @@ DROP FUNCTION IF EXISTS kwabi_slru_write_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_nextval_test();
 DROP FUNCTION IF EXISTS kwabi_trigger_get_test();
 DROP FUNCTION IF EXISTS kwabi_trigger_desc_test();
+DROP FUNCTION IF EXISTS kwabi_walsender_receive_test();
+DROP FUNCTION IF EXISTS kwabi_walsender_send_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_currval_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_setval_test();
 
@@ -107,6 +110,8 @@ CREATE FUNCTION kwabi_planner_info_test(sql text)
     RETURNS bool AS :'bundle','kwabi_planner_info_test' LANGUAGE C;
 CREATE FUNCTION kwabi_planner_estimate_cost_test(sql text)
     RETURNS float8 AS :'bundle','kwabi_planner_estimate_cost_test' LANGUAGE C;
+CREATE FUNCTION kwabi_walsender_is_connected_test()
+    RETURNS bool AS :'bundle','kwabi_walsender_is_connected_test' LANGUAGE C;
 CREATE FUNCTION kwabi_node_control()
     RETURNS bool AS :'bundle','kwabi_node_control' LANGUAGE C;
 CREATE FUNCTION kwabi_slru_create_test()
@@ -133,6 +138,10 @@ CREATE FUNCTION kwabi_trigger_get_test()
     RETURNS bool AS :'bundle','kwabi_trigger_get_test' LANGUAGE C;
 CREATE FUNCTION kwabi_trigger_desc_test()
     RETURNS bool AS :'bundle','kwabi_trigger_desc_test' LANGUAGE C;
+CREATE FUNCTION kwabi_walsender_send_test()
+    RETURNS bool AS :'bundle','kwabi_walsender_send_test' LANGUAGE C;
+CREATE FUNCTION kwabi_walsender_receive_test()
+    RETURNS int4 AS :'bundle','kwabi_walsender_receive_test' LANGUAGE C;
 
 \echo ''
 \echo '=== 1. parse a SELECT and get its node type ==='
@@ -262,6 +271,11 @@ SELECT kwabi_planner_info_test('SELECT 1') = true AS planner_info_nonnull;
 SELECT kwabi_planner_estimate_cost_test('SELECT 1') >= 0.0 AS planner_estimate_cost;
 
 \echo ''
+\echo '=== 15f. walsender_is_connected ==='
+\echo '   walsender_is_connected must be wired and return false (not a walsender)'
+SELECT kwabi_walsender_is_connected_test() = false AS walsender_is_connected;
+
+\echo ''
 \echo '=== 16. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='
 \echo '   (must ERROR with "fired as intended"; returning a row means every'
 \echo '    equality check above is vacuous)'
@@ -330,6 +344,16 @@ SELECT kwabi_trigger_get_test() AS trigger_get;
 \echo '=== 24. trigger_desc ==='
 \echo '   trigger_desc must return a non-NULL TriggerDesc for a table with a trigger'
 SELECT kwabi_trigger_desc_test() AS trigger_desc;
+
+\echo ''
+\echo '=== 25. walsender_send ==='
+\echo '   walsender_send must be callable and not crash'
+SELECT kwabi_walsender_send_test() AS walsender_send;
+
+\echo ''
+\echo '=== 25b. walsender_receive ==='
+\echo '   walsender_receive must be callable and return 0 (no data in shim)'
+SELECT kwabi_walsender_receive_test() = 0 AS walsender_receive;
 
 \echo ''
 \echo '=== node-tree-api tests complete ==='

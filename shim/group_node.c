@@ -4,6 +4,7 @@
 #include "optimizer/optimizer.h" /* planner() */
 #include "optimizer/cost.h"
 
+
 /* ---- shim-provided node tree slots ----------------------------------- */
 
 static KwabiNodeType
@@ -287,6 +288,30 @@ shim_planned_stmt_is_utility(KwabiNode stmt)
     return false;
 }
 
+static bool
+shim_walsender_is_connected(void)
+{
+    return false;
+}
+
+static void
+shim_walsender_send(const char *data, int len)
+{
+    (void) data;
+    (void) len;
+}
+
+static int
+shim_walsender_receive(char *buf, int len)
+{
+    (void) buf;
+    (void) len;
+    /* The shim is not a walsender; there is no WAL data to receive.
+     * Return 0 (no data available), consistent with walsender_is_connected
+     * returning false. */
+    return 0;
+}
+
 static double
 shim_planner_estimate_rows(KwabiPlannerInfo info, KwabiList quals)
 {
@@ -366,6 +391,80 @@ init_group_node(void)
     shim_table.planner_estimate_rows = shim_planner_estimate_rows;
     shim_table.planner_estimate_cost = shim_planner_estimate_cost;
     shim_table.planner_info = shim_planner_info;
+    shim_table.walsender_is_connected = shim_walsender_is_connected;
+    shim_table.walsender_send = shim_walsender_send;
+    shim_table.walsender_receive = shim_walsender_receive;
+}
+
+/*
+ * kwabi_walsender_is_connected_test() -> bool
+ *
+ * Test walsender_is_connected through the ABI.
+ * The slot must be non-NULL and return false (the shim is not a walsender).
+ */
+PG_FUNCTION_INFO_V1(kwabi_walsender_is_connected_test);
+
+Datum
+kwabi_walsender_is_connected_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->walsender_is_connected == NULL)
+        ereport(ERROR, (errmsg("kwabi: walsender_is_connected slot is not wired")));
+
+    bool result = api->walsender_is_connected();
+    PG_RETURN_BOOL(result);
+}
+
+/*
+ * kwabi_walsender_send_test() -> bool
+ *
+ * Test walsender_send through the ABI.
+ * The slot must be non-NULL and callable (a no-op in the shim).
+ */
+PG_FUNCTION_INFO_V1(kwabi_walsender_send_test);
+
+Datum
+kwabi_walsender_send_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->walsender_send == NULL)
+        ereport(ERROR, (errmsg("kwabi: walsender_send slot is not wired")));
+
+    api->walsender_send("test", 4);
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_walsender_receive_test() -> int4
+ *
+ * Test walsender_receive through the ABI.
+ * The slot must be non-NULL and callable. In the shim (not a walsender),
+ * walrcv_receive returns 0 (no data available), so the result is 0.
+ */
+PG_FUNCTION_INFO_V1(kwabi_walsender_receive_test);
+
+Datum
+kwabi_walsender_receive_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->walsender_receive == NULL)
+        ereport(ERROR, (errmsg("kwabi: walsender_receive slot is not wired")));
+
+    char buf[256];
+    int n = api->walsender_receive(buf, sizeof(buf));
+    PG_RETURN_INT32(n);
 }
 
 /*
