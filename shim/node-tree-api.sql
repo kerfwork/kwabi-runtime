@@ -50,6 +50,7 @@ DROP FUNCTION IF EXISTS kwabi_autovacuum_is_running_test();
 DROP FUNCTION IF EXISTS kwabi_walsender_is_connected_test();
 DROP FUNCTION IF EXISTS kwabi_node_control();
 DROP FUNCTION IF EXISTS kwabi_planner_info_test(text);
+DROP FUNCTION IF EXISTS kwabi_free_planner_info_test();
 DROP FUNCTION IF EXISTS kwabi_slru_create_test();
 DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_changes_test();
 DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_lsn_test();
@@ -63,6 +64,8 @@ DROP FUNCTION IF EXISTS kwabi_trigger_desc_test();
 DROP FUNCTION IF EXISTS kwabi_walsender_receive_test();
 DROP FUNCTION IF EXISTS kwabi_walsender_send_test();
 DROP FUNCTION IF EXISTS kwabi_autovacuum_naptime_test();
+DROP FUNCTION IF EXISTS kwabi_output_plugin_shutdown_test();
+DROP FUNCTION IF EXISTS kwabi_output_plugin_startup_test();
 DROP FUNCTION IF EXISTS kwabi_vacuum_rel_test();
 DROP FUNCTION IF EXISTS kwabi_vacuum_analyze_rel_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_currval_test();
@@ -114,6 +117,8 @@ CREATE FUNCTION kwabi_planner_estimate_rows_test()
     RETURNS float8 AS :'bundle','kwabi_planner_estimate_rows_test' LANGUAGE C;
 CREATE FUNCTION kwabi_planner_info_test(sql text)
     RETURNS bool AS :'bundle','kwabi_planner_info_test' LANGUAGE C;
+CREATE FUNCTION kwabi_free_planner_info_test()
+    RETURNS bool AS :'bundle','kwabi_free_planner_info_test' LANGUAGE C;
 CREATE FUNCTION kwabi_planner_estimate_cost_test(sql text)
     RETURNS float8 AS :'bundle','kwabi_planner_estimate_cost_test' LANGUAGE C;
 CREATE FUNCTION kwabi_postmaster_is_alive_test()
@@ -156,6 +161,10 @@ CREATE FUNCTION kwabi_walsender_receive_test()
     RETURNS int4 AS :'bundle','kwabi_walsender_receive_test' LANGUAGE C;
 CREATE FUNCTION kwabi_autovacuum_naptime_test()
     RETURNS int4 AS :'bundle','kwabi_autovacuum_naptime_test' LANGUAGE C;
+CREATE FUNCTION kwabi_output_plugin_shutdown_test()
+    RETURNS bool AS :'bundle','kwabi_output_plugin_shutdown_test' LANGUAGE C;
+CREATE FUNCTION kwabi_output_plugin_startup_test()
+    RETURNS bool AS :'bundle','kwabi_output_plugin_startup_test' LANGUAGE C;
 CREATE FUNCTION kwabi_vacuum_rel_test()
     RETURNS bool AS :'bundle','kwabi_vacuum_rel_test' LANGUAGE C;
 CREATE FUNCTION kwabi_vacuum_analyze_rel_test()
@@ -284,6 +293,11 @@ SELECT kwabi_planner_estimate_rows_test() = 1000.0::float8 AS planner_estimate_r
 SELECT kwabi_planner_info_test('SELECT 1') = true AS planner_info_nonnull;
 
 \echo ''
+\echo '=== 15d2. free_planner_info ==='
+\echo '   free_planner_info must be wired and callable (no-op for NULL)'
+SELECT kwabi_free_planner_info_test() = true AS free_planner_info;
+
+\echo ''
 \echo '=== 15e. planner_estimate_cost ==='
 \echo '   planner_estimate_cost must return a non-negative cost for a parsed query'
 SELECT kwabi_planner_estimate_cost_test('SELECT 1') >= 0.0 AS planner_estimate_cost;
@@ -392,6 +406,16 @@ SELECT kwabi_walsender_receive_test() = 0 AS walsender_receive;
 \echo '=== 25c. autovacuum_naptime ==='
 \echo '   autovacuum_naptime must be wired and return a non-negative integer'
 SELECT kwabi_autovacuum_naptime_test() >= 0 AS autovacuum_naptime;
+
+\echo ''
+\echo '=== 25c2. output_plugin_shutdown ==='
+\echo '   output_plugin_shutdown must be wired and callable (no-op in shim)'
+SELECT kwabi_output_plugin_shutdown_test() = true AS output_plugin_shutdown;
+
+\echo ''
+\echo '=== 25c3. output_plugin_startup ==='
+\echo '   output_plugin_startup must be wired and callable (no-op in shim)'
+SELECT kwabi_output_plugin_startup_test() = true AS output_plugin_startup;
 
 \echo ''
 \echo '=== 25d. vacuum_rel ==='

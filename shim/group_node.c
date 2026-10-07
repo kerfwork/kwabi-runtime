@@ -332,6 +332,20 @@ shim_walsender_receive(char *buf, int len)
     return 0;
 }
 
+static void
+shim_output_plugin_shutdown(KwabiOutputPluginCallbacks callbacks)
+{
+    (void) callbacks;
+    /* The shim is not an output plugin; shutdown is a no-op. */
+}
+
+static void
+shim_output_plugin_startup(KwabiOutputPluginCallbacks callbacks)
+{
+    (void) callbacks;
+    /* The shim is not an output plugin; startup is a no-op. */
+}
+
 static double
 shim_planner_estimate_rows(KwabiPlannerInfo info, KwabiList quals)
 {
@@ -381,6 +395,14 @@ shim_planner_info(KwabiNode parse, int cursorOptions, ParamListInfo boundParams)
     PG_END_TRY();
 
     return result;
+}
+
+static void
+shim_free_planner_info(KwabiPlannerInfo info)
+{
+    if (info == NULL)
+        return;
+    pfree(info);
 }
 
 static int
@@ -443,9 +465,12 @@ init_group_node(void)
     shim_table.planner_estimate_rows = shim_planner_estimate_rows;
     shim_table.planner_estimate_cost = shim_planner_estimate_cost;
     shim_table.planner_info = shim_planner_info;
+    shim_table.free_planner_info = shim_free_planner_info;
     shim_table.walsender_is_connected = shim_walsender_is_connected;
     shim_table.walsender_send = shim_walsender_send;
     shim_table.walsender_receive = shim_walsender_receive;
+    shim_table.output_plugin_shutdown = shim_output_plugin_shutdown;
+    shim_table.output_plugin_startup = shim_output_plugin_startup;
     shim_table.postmaster_is_alive = shim_postmaster_is_alive;
     shim_table.postmaster_get_child_pid = shim_postmaster_get_child_pid;
     shim_table.autovacuum_is_running = shim_autovacuum_is_running;
@@ -595,6 +620,52 @@ kwabi_autovacuum_is_running_test(PG_FUNCTION_ARGS)
 }
 
 /*
+ * kwabi_output_plugin_shutdown_test() -> bool
+ *
+ * Test output_plugin_shutdown through the ABI.
+ * The slot must be non-NULL and callable (a no-op in the shim).
+ */
+PG_FUNCTION_INFO_V1(kwabi_output_plugin_shutdown_test);
+
+Datum
+kwabi_output_plugin_shutdown_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->output_plugin_shutdown == NULL)
+        ereport(ERROR, (errmsg("kwabi: output_plugin_shutdown slot is not wired")));
+
+    api->output_plugin_shutdown(NULL);
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_output_plugin_startup_test() -> bool
+ *
+ * Test output_plugin_startup through the ABI.
+ * The slot must be non-NULL and callable (a no-op in the shim).
+ */
+PG_FUNCTION_INFO_V1(kwabi_output_plugin_startup_test);
+
+Datum
+kwabi_output_plugin_startup_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->output_plugin_startup == NULL)
+        ereport(ERROR, (errmsg("kwabi: output_plugin_startup slot is not wired")));
+
+    api->output_plugin_startup(NULL);
+    PG_RETURN_BOOL(true);
+}
+
+/*
  * kwabi_planner_estimate_rows_test() -> float8
  *
  * Test planner_estimate_rows through the ABI.
@@ -660,6 +731,29 @@ kwabi_planner_info_test(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("kwabi: planner_info returned NULL")));
 
     pfree(sql);
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_free_planner_info_test() -> bool
+ *
+ * Test free_planner_info through the ABI.
+ * The slot must be non-NULL and callable (a no-op for NULL).
+ */
+PG_FUNCTION_INFO_V1(kwabi_free_planner_info_test);
+
+Datum
+kwabi_free_planner_info_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->free_planner_info == NULL)
+        ereport(ERROR, (errmsg("kwabi: free_planner_info slot is not wired")));
+
+    api->free_planner_info(NULL);
     PG_RETURN_BOOL(true);
 }
 

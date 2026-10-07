@@ -3908,6 +3908,44 @@ kwabi_type_output(PG_FUNCTION_ARGS)
 }
 
 /*
+ * kwabi_type_send(int4, text) -> bytea
+ *
+ * Serialize a value to its binary wire format through the ABI.
+ * Parses the text input to a Datum via type_input, then calls
+ * type_send to produce the binary representation.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_send);
+
+Datum
+kwabi_type_send(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_input == NULL ||
+        shim_api->type_send == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_input/type_send is not wired")));
+
+    Oid typoid = (Oid) PG_GETARG_INT32(0);
+    text *value_text = PG_GETARG_TEXT_P(1);
+
+    char *value_str = text_to_cstring(value_text);
+    Datum value = shim_api->type_input(typoid, value_str, -1);
+    pfree(value_str);
+
+    if (value == (Datum) 0)
+        PG_RETURN_NULL();
+
+    StringInfoData buf;
+    initStringInfo(&buf);
+    shim_api->type_send(typoid, value, &buf);
+
+    bytea *ret = (bytea *) palloc(buf.len + VARHDRSZ);
+    SET_VARSIZE(ret, buf.len + VARHDRSZ);
+    memcpy(VARDATA(ret), buf.data, buf.len);
+    pfree(buf.data);
+
+    PG_RETURN_BYTEA_P(ret);
+}
+
+/*
  * kwabi_type_control() -> bool
  *
  * The NEGATIVE CONTROL. It calls type_length on a known type and asserts
