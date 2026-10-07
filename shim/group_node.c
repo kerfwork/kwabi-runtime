@@ -295,6 +295,13 @@ shim_postmaster_is_alive(void)
     return true; /* postmaster is alive if backend is running */
 }
 
+static int
+shim_postmaster_get_child_pid(BackendId backend_id)
+{
+    (void) backend_id;
+    return -1; /* shim has no child processes */
+}
+
 static bool
 shim_autovacuum_is_running(void)
 {
@@ -382,6 +389,32 @@ shim_autovacuum_naptime(void)
     return atoi(GetConfigOptionByName("autovacuum_naptime", NULL, false));
 }
 
+static void
+shim_vacuum_rel(Relation rel, VacuumParams params, BufferAccessStrategy bstrategy)
+{
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: vacuum_rel received NULL relation")));
+    /* vacuum_rel takes RangeVar* in PG, not Oid — stub for now */
+    (void) rel; (void) &params; (void) bstrategy;
+}
+
+static void
+shim_vacuum_analyze_rel(Relation rel, VacuumParams params, BufferAccessStrategy bstrategy)
+{
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: vacuum_analyze_rel received NULL relation")));
+
+    Oid relid = RelationGetRelid(rel);
+    RangeVar *rv = makeNode(RangeVar);
+    rv->schemaname = get_namespace_name(RelationGetNamespace(rel));
+    rv->relname = pstrdup(RelationGetRelationName(rel));
+    rv->relpersistence = rel->rd_rel->relpersistence;
+    rv->location = -1;
+
+    /* analyze_rel takes RangeVar* in PG, not Oid — stub for now */
+    (void) relid; (void) rv; (void) &params; (void) bstrategy;
+}
+
 void
 init_group_node(void)
 {
@@ -414,8 +447,11 @@ init_group_node(void)
     shim_table.walsender_send = shim_walsender_send;
     shim_table.walsender_receive = shim_walsender_receive;
     shim_table.postmaster_is_alive = shim_postmaster_is_alive;
+    shim_table.postmaster_get_child_pid = shim_postmaster_get_child_pid;
     shim_table.autovacuum_is_running = shim_autovacuum_is_running;
     shim_table.autovacuum_naptime = shim_autovacuum_naptime;
+    shim_table.vacuum_rel = shim_vacuum_rel;
+    shim_table.vacuum_analyze_rel = shim_vacuum_analyze_rel;
 }
 
 /*
@@ -439,6 +475,29 @@ kwabi_postmaster_is_alive_test(PG_FUNCTION_ARGS)
 
     bool result = api->postmaster_is_alive();
     PG_RETURN_BOOL(result);
+}
+
+/*
+ * kwabi_postmaster_get_child_pid_test() -> int4
+ *
+ * Test postmaster_get_child_pid through the ABI.
+ * The slot must be non-NULL and return -1 (no child processes in the shim).
+ */
+PG_FUNCTION_INFO_V1(kwabi_postmaster_get_child_pid_test);
+
+Datum
+kwabi_postmaster_get_child_pid_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->postmaster_get_child_pid == NULL)
+        ereport(ERROR, (errmsg("kwabi: postmaster_get_child_pid slot is not wired")));
+
+    int result = api->postmaster_get_child_pid(0);
+    PG_RETURN_INT32(result);
 }
 
 /*
@@ -672,4 +731,166 @@ kwabi_planner_estimate_cost_test(PG_FUNCTION_ARGS)
 
     pfree(sql);
     PG_RETURN_FLOAT8(cost);
+}
+
+/*
+ * kwabi_vacuum_rel_test() -> bool
+ *
+ * Test vacuum_rel through the ABI.
+ * Creates a temp table, opens it through the ABI, calls vacuum_rel,
+ * and verifies it completes without error.
+ */
+PG_FUNCTION_INFO_V1(kwabi_vacuum_rel_test);
+
+Datum
+kwabi_vacuum_rel_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->vacuum_rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: vacuum_rel slot is not wired")));
+
+    if (api->relation_open == NULL || api->relation_close == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation slots are not wired")));
+
+    /* Create a temp table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE TEMP TABLE kwabi_vacuum_test_t (id int)", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE TABLE failed")));
+    }
+    SPI_finish();
+
+    /* Get the Oid of the temp table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("SELECT oid FROM pg_class WHERE relname = 'kwabi_vacuum_test_t'", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    Oid relid = InvalidOid;
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            relid = DatumGetObjectId(d);
+    }
+    SPI_finish();
+
+    if (!OidIsValid(relid))
+        ereport(ERROR, (errmsg("kwabi: could not find test table")));
+
+    /* Open the relation through the ABI */
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    /* Call vacuum_rel through the ABI */
+    VacuumParams params;
+    memset(&params, 0, sizeof(params));
+    params.options = VACOPT_VACUUM;
+    api->vacuum_rel((Relation) rel, params, NULL);
+
+    /* Close the relation */
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    /* Clean up */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("DROP TABLE kwabi_vacuum_test_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP TABLE failed")));
+    }
+    SPI_finish();
+
+    PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_vacuum_analyze_rel_test() -> bool
+ *
+ * Test vacuum_analyze_rel through the ABI.
+ * Creates a temp table, opens it through the ABI, calls vacuum_analyze_rel,
+ * and verifies it completes without error.
+ */
+PG_FUNCTION_INFO_V1(kwabi_vacuum_analyze_rel_test);
+
+Datum
+kwabi_vacuum_analyze_rel_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->vacuum_analyze_rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: vacuum_analyze_rel slot is not wired")));
+
+    if (api->relation_open == NULL || api->relation_close == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation slots are not wired")));
+
+    /* Create a temp table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE TEMP TABLE kwabi_vacuum_analyze_test_t (id int)", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE TABLE failed")));
+    }
+    SPI_finish();
+
+    /* Get the Oid of the temp table */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("SELECT oid FROM pg_class WHERE relname = 'kwabi_vacuum_analyze_test_t'", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    Oid relid = InvalidOid;
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            relid = DatumGetObjectId(d);
+    }
+    SPI_finish();
+
+    if (!OidIsValid(relid))
+        ereport(ERROR, (errmsg("kwabi: could not find test table")));
+
+    /* Open the relation through the ABI */
+    KwabiRelation rel = api->relation_open(relid, KWABI_LOCKMODE_SHARE);
+    if (rel == NULL)
+        ereport(ERROR, (errmsg("kwabi: relation_open failed")));
+
+    /* Call vacuum_analyze_rel through the ABI */
+    VacuumParams params;
+    memset(&params, 0, sizeof(params));
+    params.options = VACOPT_ANALYZE;
+    api->vacuum_analyze_rel((Relation) rel, params, NULL);
+
+    /* Close the relation */
+    api->relation_close(rel, KWABI_LOCKMODE_SHARE);
+
+    /* Clean up */
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("DROP TABLE kwabi_vacuum_analyze_test_t", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP TABLE failed")));
+    }
+    SPI_finish();
+
+    PG_RETURN_BOOL(true);
 }

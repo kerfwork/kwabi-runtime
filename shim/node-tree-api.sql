@@ -45,6 +45,7 @@ DROP FUNCTION IF EXISTS kwabi_planned_stmt_rtable_length(sql text);
 DROP FUNCTION IF EXISTS kwabi_planner_estimate_rows_test();
 DROP FUNCTION IF EXISTS kwabi_planner_estimate_cost_test(sql text);
 DROP FUNCTION IF EXISTS kwabi_postmaster_is_alive_test();
+DROP FUNCTION IF EXISTS kwabi_postmaster_get_child_pid_test();
 DROP FUNCTION IF EXISTS kwabi_autovacuum_is_running_test();
 DROP FUNCTION IF EXISTS kwabi_walsender_is_connected_test();
 DROP FUNCTION IF EXISTS kwabi_node_control();
@@ -62,6 +63,8 @@ DROP FUNCTION IF EXISTS kwabi_trigger_desc_test();
 DROP FUNCTION IF EXISTS kwabi_walsender_receive_test();
 DROP FUNCTION IF EXISTS kwabi_walsender_send_test();
 DROP FUNCTION IF EXISTS kwabi_autovacuum_naptime_test();
+DROP FUNCTION IF EXISTS kwabi_vacuum_rel_test();
+DROP FUNCTION IF EXISTS kwabi_vacuum_analyze_rel_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_currval_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_setval_test();
 
@@ -115,6 +118,8 @@ CREATE FUNCTION kwabi_planner_estimate_cost_test(sql text)
     RETURNS float8 AS :'bundle','kwabi_planner_estimate_cost_test' LANGUAGE C;
 CREATE FUNCTION kwabi_postmaster_is_alive_test()
     RETURNS bool AS :'bundle','kwabi_postmaster_is_alive_test' LANGUAGE C;
+CREATE FUNCTION kwabi_postmaster_get_child_pid_test()
+    RETURNS int4 AS :'bundle','kwabi_postmaster_get_child_pid_test' LANGUAGE C;
 CREATE FUNCTION kwabi_autovacuum_is_running_test()
     RETURNS bool AS :'bundle','kwabi_autovacuum_is_running_test' LANGUAGE C;
 CREATE FUNCTION kwabi_walsender_is_connected_test()
@@ -151,6 +156,10 @@ CREATE FUNCTION kwabi_walsender_receive_test()
     RETURNS int4 AS :'bundle','kwabi_walsender_receive_test' LANGUAGE C;
 CREATE FUNCTION kwabi_autovacuum_naptime_test()
     RETURNS int4 AS :'bundle','kwabi_autovacuum_naptime_test' LANGUAGE C;
+CREATE FUNCTION kwabi_vacuum_rel_test()
+    RETURNS bool AS :'bundle','kwabi_vacuum_rel_test' LANGUAGE C;
+CREATE FUNCTION kwabi_vacuum_analyze_rel_test()
+    RETURNS bool AS :'bundle','kwabi_vacuum_analyze_rel_test' LANGUAGE C;
 
 \echo ''
 \echo '=== 1. parse a SELECT and get its node type ==='
@@ -290,6 +299,11 @@ SELECT kwabi_walsender_is_connected_test() = false AS walsender_is_connected;
 SELECT kwabi_postmaster_is_alive_test() = true AS postmaster_is_alive;
 
 \echo ''
+\echo '=== 15g2. postmaster_get_child_pid ==='
+\echo '   postmaster_get_child_pid must be wired and return -1 (no children in shim)'
+SELECT kwabi_postmaster_get_child_pid_test() = -1 AS postmaster_get_child_pid;
+
+\echo ''
 \echo '=== 15h. autovacuum_is_running ==='
 \echo '   autovacuum_is_running must be wired and return false'
 SELECT kwabi_autovacuum_is_running_test() = false AS autovacuum_is_running;
@@ -378,6 +392,16 @@ SELECT kwabi_walsender_receive_test() = 0 AS walsender_receive;
 \echo '=== 25c. autovacuum_naptime ==='
 \echo '   autovacuum_naptime must be wired and return a non-negative integer'
 SELECT kwabi_autovacuum_naptime_test() >= 0 AS autovacuum_naptime;
+
+\echo ''
+\echo '=== 25d. vacuum_rel ==='
+\echo '   vacuum_rel must be wired and callable on a temp table'
+SELECT kwabi_vacuum_rel_test() AS vacuum_rel;
+
+\echo ''
+\echo '=== 25e. vacuum_analyze_rel ==='
+\echo '   vacuum_analyze_rel must be wired and callable on a temp table'
+SELECT kwabi_vacuum_analyze_rel_test() AS vacuum_analyze_rel;
 
 \echo ''
 \echo '=== node-tree-api tests complete ==='
