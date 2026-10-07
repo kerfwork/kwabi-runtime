@@ -5,6 +5,7 @@
 #include "optimizer/cost.h"
 
 
+
 /* ---- shim-provided node tree slots ----------------------------------- */
 
 static KwabiNodeType
@@ -289,6 +290,18 @@ shim_planned_stmt_is_utility(KwabiNode stmt)
 }
 
 static bool
+shim_postmaster_is_alive(void)
+{
+    return true; /* postmaster is alive if backend is running */
+}
+
+static bool
+shim_autovacuum_is_running(void)
+{
+    return false;
+}
+
+static bool
 shim_walsender_is_connected(void)
 {
     return false;
@@ -363,6 +376,12 @@ shim_planner_info(KwabiNode parse, int cursorOptions, ParamListInfo boundParams)
     return result;
 }
 
+static int
+shim_autovacuum_naptime(void)
+{
+    return atoi(GetConfigOptionByName("autovacuum_naptime", NULL, false));
+}
+
 void
 init_group_node(void)
 {
@@ -394,6 +413,32 @@ init_group_node(void)
     shim_table.walsender_is_connected = shim_walsender_is_connected;
     shim_table.walsender_send = shim_walsender_send;
     shim_table.walsender_receive = shim_walsender_receive;
+    shim_table.postmaster_is_alive = shim_postmaster_is_alive;
+    shim_table.autovacuum_is_running = shim_autovacuum_is_running;
+    shim_table.autovacuum_naptime = shim_autovacuum_naptime;
+}
+
+/*
+ * kwabi_postmaster_is_alive_test() -> bool
+ *
+ * Test postmaster_is_alive through the ABI.
+ * The slot must be non-NULL and return true (the postmaster is alive).
+ */
+PG_FUNCTION_INFO_V1(kwabi_postmaster_is_alive_test);
+
+Datum
+kwabi_postmaster_is_alive_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->postmaster_is_alive == NULL)
+        ereport(ERROR, (errmsg("kwabi: postmaster_is_alive slot is not wired")));
+
+    bool result = api->postmaster_is_alive();
+    PG_RETURN_BOOL(result);
 }
 
 /*
@@ -468,6 +513,29 @@ kwabi_walsender_receive_test(PG_FUNCTION_ARGS)
 }
 
 /*
+ * kwabi_autovacuum_is_running_test() -> bool
+ *
+ * Test autovacuum_is_running through the ABI.
+ * The slot must be non-NULL and return false (autovacuum is not running).
+ */
+PG_FUNCTION_INFO_V1(kwabi_autovacuum_is_running_test);
+
+Datum
+kwabi_autovacuum_is_running_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->autovacuum_is_running == NULL)
+        ereport(ERROR, (errmsg("kwabi: autovacuum_is_running slot is not wired")));
+
+    bool result = api->autovacuum_is_running();
+    PG_RETURN_BOOL(result);
+}
+
+/*
  * kwabi_planner_estimate_rows_test() -> float8
  *
  * Test planner_estimate_rows through the ABI.
@@ -534,6 +602,32 @@ kwabi_planner_info_test(PG_FUNCTION_ARGS)
 
     pfree(sql);
     PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_autovacuum_naptime_test() -> int4
+ *
+ * Test autovacuum_naptime through the ABI.
+ * The slot must be non-NULL and return a non-negative integer.
+ */
+PG_FUNCTION_INFO_V1(kwabi_autovacuum_naptime_test);
+
+Datum
+kwabi_autovacuum_naptime_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->autovacuum_naptime == NULL)
+        ereport(ERROR, (errmsg("kwabi: autovacuum_naptime slot is not wired")));
+
+    int result = api->autovacuum_naptime();
+    if (result < 0)
+        ereport(ERROR, (errmsg("kwabi: autovacuum_naptime returned negative value %d", result)));
+
+    PG_RETURN_INT32(result);
 }
 
 /*

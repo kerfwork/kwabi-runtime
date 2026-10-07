@@ -44,6 +44,8 @@ DROP FUNCTION IF EXISTS kwabi_query_limit_offset(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_rtable_length(sql text);
 DROP FUNCTION IF EXISTS kwabi_planner_estimate_rows_test();
 DROP FUNCTION IF EXISTS kwabi_planner_estimate_cost_test(sql text);
+DROP FUNCTION IF EXISTS kwabi_postmaster_is_alive_test();
+DROP FUNCTION IF EXISTS kwabi_autovacuum_is_running_test();
 DROP FUNCTION IF EXISTS kwabi_walsender_is_connected_test();
 DROP FUNCTION IF EXISTS kwabi_node_control();
 DROP FUNCTION IF EXISTS kwabi_planner_info_test(text);
@@ -59,6 +61,7 @@ DROP FUNCTION IF EXISTS kwabi_trigger_get_test();
 DROP FUNCTION IF EXISTS kwabi_trigger_desc_test();
 DROP FUNCTION IF EXISTS kwabi_walsender_receive_test();
 DROP FUNCTION IF EXISTS kwabi_walsender_send_test();
+DROP FUNCTION IF EXISTS kwabi_autovacuum_naptime_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_currval_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_setval_test();
 
@@ -110,6 +113,10 @@ CREATE FUNCTION kwabi_planner_info_test(sql text)
     RETURNS bool AS :'bundle','kwabi_planner_info_test' LANGUAGE C;
 CREATE FUNCTION kwabi_planner_estimate_cost_test(sql text)
     RETURNS float8 AS :'bundle','kwabi_planner_estimate_cost_test' LANGUAGE C;
+CREATE FUNCTION kwabi_postmaster_is_alive_test()
+    RETURNS bool AS :'bundle','kwabi_postmaster_is_alive_test' LANGUAGE C;
+CREATE FUNCTION kwabi_autovacuum_is_running_test()
+    RETURNS bool AS :'bundle','kwabi_autovacuum_is_running_test' LANGUAGE C;
 CREATE FUNCTION kwabi_walsender_is_connected_test()
     RETURNS bool AS :'bundle','kwabi_walsender_is_connected_test' LANGUAGE C;
 CREATE FUNCTION kwabi_node_control()
@@ -142,6 +149,8 @@ CREATE FUNCTION kwabi_walsender_send_test()
     RETURNS bool AS :'bundle','kwabi_walsender_send_test' LANGUAGE C;
 CREATE FUNCTION kwabi_walsender_receive_test()
     RETURNS int4 AS :'bundle','kwabi_walsender_receive_test' LANGUAGE C;
+CREATE FUNCTION kwabi_autovacuum_naptime_test()
+    RETURNS int4 AS :'bundle','kwabi_autovacuum_naptime_test' LANGUAGE C;
 
 \echo ''
 \echo '=== 1. parse a SELECT and get its node type ==='
@@ -276,6 +285,16 @@ SELECT kwabi_planner_estimate_cost_test('SELECT 1') >= 0.0 AS planner_estimate_c
 SELECT kwabi_walsender_is_connected_test() = false AS walsender_is_connected;
 
 \echo ''
+\echo '=== 15g. postmaster_is_alive ==='
+\echo '   postmaster_is_alive must be wired and return true'
+SELECT kwabi_postmaster_is_alive_test() = true AS postmaster_is_alive;
+
+\echo ''
+\echo '=== 15h. autovacuum_is_running ==='
+\echo '   autovacuum_is_running must be wired and return false'
+SELECT kwabi_autovacuum_is_running_test() = false AS autovacuum_is_running;
+
+\echo ''
 \echo '=== 16. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='
 \echo '   (must ERROR with "fired as intended"; returning a row means every'
 \echo '    equality check above is vacuous)'
@@ -354,6 +373,11 @@ SELECT kwabi_walsender_send_test() AS walsender_send;
 \echo '=== 25b. walsender_receive ==='
 \echo '   walsender_receive must be callable and return 0 (no data in shim)'
 SELECT kwabi_walsender_receive_test() = 0 AS walsender_receive;
+
+\echo ''
+\echo '=== 25c. autovacuum_naptime ==='
+\echo '   autovacuum_naptime must be wired and return a non-negative integer'
+SELECT kwabi_autovacuum_naptime_test() >= 0 AS autovacuum_naptime;
 
 \echo ''
 \echo '=== node-tree-api tests complete ==='
