@@ -412,6 +412,13 @@ shim_autovacuum_naptime(void)
 }
 
 static void
+shim_syslogger_log(const char *msg)
+{
+    (void) msg;
+    /* The shim is not a syslogger; logging is a no-op. */
+}
+
+static void
 shim_vacuum_rel(Relation rel, VacuumParams params, BufferAccessStrategy bstrategy)
 {
     if (rel == NULL)
@@ -475,6 +482,7 @@ init_group_node(void)
     shim_table.postmaster_get_child_pid = shim_postmaster_get_child_pid;
     shim_table.autovacuum_is_running = shim_autovacuum_is_running;
     shim_table.autovacuum_naptime = shim_autovacuum_naptime;
+    shim_table.syslogger_log = shim_syslogger_log;
     shim_table.vacuum_rel = shim_vacuum_rel;
     shim_table.vacuum_analyze_rel = shim_vacuum_analyze_rel;
 }
@@ -825,6 +833,29 @@ kwabi_planner_estimate_cost_test(PG_FUNCTION_ARGS)
 
     pfree(sql);
     PG_RETURN_FLOAT8(cost);
+}
+
+/*
+ * kwabi_syslogger_log_test() -> bool
+ *
+ * Test syslogger_log through the ABI.
+ * The slot must be non-NULL and callable (a no-op in the shim).
+ */
+PG_FUNCTION_INFO_V1(kwabi_syslogger_log_test);
+
+Datum
+kwabi_syslogger_log_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->syslogger_log == NULL)
+        ereport(ERROR, (errmsg("kwabi: syslogger_log slot is not wired")));
+
+    api->syslogger_log("kwabi: syslogger_log test");
+    PG_RETURN_BOOL(true);
 }
 
 /*

@@ -3946,6 +3946,43 @@ kwabi_type_send(PG_FUNCTION_ARGS)
 }
 
 /*
+ * kwabi_type_recv(int4, bytea) -> text
+ *
+ * Parse a binary representation of a value into its Datum form through the ABI,
+ * then convert back to text for the SQL boundary.
+ */
+PG_FUNCTION_INFO_V1(kwabi_type_recv);
+
+Datum
+kwabi_type_recv(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->type_recv == NULL ||
+        shim_api->type_output == NULL)
+        ereport(ERROR, (errmsg("kwabi: type_recv/type_output is not wired")));
+
+    Oid typoid = (Oid) PG_GETARG_INT32(0);
+    bytea *input_bytea = PG_GETARG_BYTEA_P(1);
+
+    StringInfoData buf;
+    initStringInfo(&buf);
+    appendBinaryStringInfo(&buf, VARDATA(input_bytea), VARSIZE(input_bytea) - VARHDRSZ);
+
+    Datum result = shim_api->type_recv(typoid, &buf);
+    pfree(buf.data);
+
+    if (result == (Datum) 0)
+        PG_RETURN_NULL();
+
+    char *output_str = shim_api->type_output(typoid, result);
+    if (output_str == NULL)
+        PG_RETURN_NULL();
+
+    text *ret = cstring_to_text(output_str);
+    pfree(output_str);
+    PG_RETURN_TEXT_P(ret);
+}
+
+/*
  * kwabi_type_control() -> bool
  *
  * The NEGATIVE CONTROL. It calls type_length on a known type and asserts

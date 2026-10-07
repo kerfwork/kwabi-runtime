@@ -68,6 +68,7 @@ DROP FUNCTION IF EXISTS kwabi_output_plugin_shutdown_test();
 DROP FUNCTION IF EXISTS kwabi_output_plugin_startup_test();
 DROP FUNCTION IF EXISTS kwabi_vacuum_rel_test();
 DROP FUNCTION IF EXISTS kwabi_vacuum_analyze_rel_test();
+DROP FUNCTION IF EXISTS kwabi_syslogger_log_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_currval_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_setval_test();
 
@@ -169,6 +170,8 @@ CREATE FUNCTION kwabi_vacuum_rel_test()
     RETURNS bool AS :'bundle','kwabi_vacuum_rel_test' LANGUAGE C;
 CREATE FUNCTION kwabi_vacuum_analyze_rel_test()
     RETURNS bool AS :'bundle','kwabi_vacuum_analyze_rel_test' LANGUAGE C;
+CREATE FUNCTION kwabi_syslogger_log_test()
+    RETURNS bool AS :'bundle','kwabi_syslogger_log_test' LANGUAGE C;
 
 \echo ''
 \echo '=== 1. parse a SELECT and get its node type ==='
@@ -426,6 +429,11 @@ SELECT kwabi_vacuum_rel_test() AS vacuum_rel;
 \echo '=== 25e. vacuum_analyze_rel ==='
 \echo '   vacuum_analyze_rel must be wired and callable on a temp table'
 SELECT kwabi_vacuum_analyze_rel_test() AS vacuum_analyze_rel;
+
+\echo ''
+\echo '=== 25f. syslogger_log ==='
+\echo '   syslogger_log must be wired and callable (no-op in shim)'
+SELECT kwabi_syslogger_log_test() = true AS syslogger_log;
 
 \echo ''
 \echo '=== node-tree-api tests complete ==='

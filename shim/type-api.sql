@@ -45,6 +45,7 @@ DROP FUNCTION IF EXISTS kwabi_type_base_type(int4);
 DROP FUNCTION IF EXISTS kwabi_type_input(int4, text, int4);
 DROP FUNCTION IF EXISTS kwabi_type_output(int4, text);
 DROP FUNCTION IF EXISTS kwabi_type_send(int4, text);
+DROP FUNCTION IF EXISTS kwabi_type_recv(int4, bytea);
 DROP FUNCTION IF EXISTS kwabi_type_control();
 
 CREATE FUNCTION kwabi_type_length(int4)
@@ -63,6 +64,8 @@ CREATE FUNCTION kwabi_type_output(int4, text)
     RETURNS text AS :'bundle','kwabi_type_output' LANGUAGE C;
 CREATE FUNCTION kwabi_type_send(int4, text)
     RETURNS bytea AS :'bundle','kwabi_type_send' LANGUAGE C;
+CREATE FUNCTION kwabi_type_recv(int4, bytea)
+    RETURNS text AS :'bundle','kwabi_type_recv' LANGUAGE C;
 CREATE FUNCTION kwabi_type_control()
     RETURNS bool AS :'bundle','kwabi_type_control' LANGUAGE C;
 
@@ -142,13 +145,17 @@ SELECT kwabi_type_output(25, 'hello') = 'hello' AS type_output_text;
 SELECT kwabi_type_send(23, '42') = '\x0000002a'::bytea AS type_send_int4;
 
 \echo ''
-\echo '=== 19. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='
+\echo '=== 19. type_recv for int4 (23) binary 0x0000002a should produce "42" ==='
+SELECT kwabi_type_recv(23, '\x0000002a'::bytea) = '42' AS type_recv_int4;
+
+\echo ''
+\echo '=== 20. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='
 \echo '   (must ERROR with "fired as intended"; returning a row means every'
 \echo '    equality check above is vacuous)'
 SELECT kwabi_type_control() AS control_should_not_return;
 
 \echo ''
-\echo '=== 20. the backend survived all of the above ==='
+\echo '=== 21. the backend survived all of the above ==='
 SELECT kwabi_type_length(23) = 4 AS after_all_checks;
 
 \echo ''

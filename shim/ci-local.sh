@@ -475,13 +475,14 @@ for M in "${MAJORS[@]}"; do
     TYPE_IN=$(grep -A2 'type_input_int4' "$OUT" | grep -cE '^ t')
     TYPE_OUT=$(grep -A2 'type_output_int4' "$OUT" | grep -cE '^ t')
     TYPE_SEND=$(grep -A2 'type_send_int4' "$OUT" | grep -cE '^ t')
+    TYPE_RECV=$(grep -A2 'type_recv_int4' "$OUT" | grep -cE '^ t')
 
     if [ "$TYPE_FALSE" -eq 0 ] && [ "$TYPE_LEN" -ge 1 ] && \
        [ "$TYPE_ARR" -ge 1 ] && [ "$TYPE_IN" -ge 1 ] && [ "$TYPE_OUT" -ge 1 ] && \
-       [ "$TYPE_SEND" -ge 1 ]; then
+       [ "$TYPE_SEND" -ge 1 ] && [ "$TYPE_RECV" -ge 1 ]; then
         record PASS "$M" "type-api green ($TYPE_TRUE assertions)"
     else
-        record FAIL "$M" "type-api: true=$TYPE_TRUE false=$TYPE_FALSE len=$TYPE_LEN arr=$TYPE_ARR in=$TYPE_IN out=$TYPE_OUT send=$TYPE_SEND"
+        record FAIL "$M" "type-api: true=$TYPE_TRUE false=$TYPE_FALSE len=$TYPE_LEN arr=$TYPE_ARR in=$TYPE_IN out=$TYPE_OUT send=$TYPE_SEND recv=$TYPE_RECV"
         echo "      see $OUT"
     fi
 
