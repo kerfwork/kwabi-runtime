@@ -35,12 +35,10 @@ typedef struct KwabiEStateImpl
  * is the same atomicity rule the fmgr and try_body slots follow.
  */
 /*
- * KwabiEState and QueryDesc are both opaque handles at the ABI. In an
- * EXTENSION, kwabi.h types QueryDesc as `void *`; in the SHIM, KWABI_NO_PG_TYPE_ALIASES
- * makes it PostgreSQL's real `struct QueryDesc`, so the slot field reads as a
- * by-value struct. Passing a QueryDesc by value across the ABI is not the
- * contract, so the shim takes a POINTER and the assignment below casts to the
- * slot's declared type. The extension side is unaffected: it sees void*.
+ * KwabiEState and KwabiQueryDesc are both opaque `void *` handles at the ABI.
+ * The shim's own QueryDesc is PostgreSQL's `struct QueryDesc *`; the slot
+ * takes the handle, so the assignment in init_group_executor casts the
+ * function pointer to the handle form. Both sides see the same pointer.
  */
 static KwabiEState
 shim_executor_start(QueryDesc *qd, int eflags)
@@ -62,8 +60,15 @@ shim_executor_start(QueryDesc *qd, int eflags)
          * getnext pulls from it later, and running with DestSPI would try to
          * drive SPI from inside a command that is already using it.
          */
+        /*
+         * SetTuplestoreDestReceiverParams takes the Tuplestorestate BY VALUE
+         * (PG15+). Passing &estate->tupstore, a Tuplestorestate **, made the
+         * receiver write tuples through the address of our struct field and
+         * SIGBUS in the server image. Create the store here and hand it over.
+         */
+        estate->tupstore = tuplestore_begin_heap(false, false, work_mem);
         qd->dest = CreateTuplestoreDestReceiver();
-        SetTuplestoreDestReceiverParams(qd->dest, &estate->tupstore,
+        SetTuplestoreDestReceiverParams(qd->dest, estate->tupstore,
                                         CurrentMemoryContext, false, NULL, NULL);
 
         ExecutorStart(qd, eflags);
@@ -184,7 +189,7 @@ init_group_executor(void)
 {
     /* The casts bridge the shim's real struct types and the ABI's opaque
      * handles; see the note on shim_executor_start. */
-    shim_table.executor_start   = (KwabiEState (*)(QueryDesc, int)) shim_executor_start;
+    shim_table.executor_start   = (KwabiEState (*)(KwabiQueryDesc, int)) shim_executor_start;
     shim_table.executor_run     = shim_executor_run;
     shim_table.executor_getnext = shim_executor_getnext;
     shim_table.executor_finish  = shim_executor_finish;
@@ -247,22 +252,37 @@ kwabi_executor_test(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("kwabi: SPI_prepare failed")));
     }
 
-    QueryDesc *queryDesc = (QueryDesc *) palloc(sizeof(QueryDesc));
-    queryDesc->plannedstmt = SPI_plan_get_cached_plan(plan);
-    queryDesc->sourceText = "SELECT val FROM kwabi_exec_t";
-    queryDesc->snapshot = GetActiveSnapshot();
-    queryDesc->crosscheck_snapshot = InvalidSnapshot;
-    queryDesc->dest = CreateDestReceiver(DestSPI);
-    queryDesc->params = NULL;
-    queryDesc->tupDesc = NULL;
-    queryDesc->estate = NULL;
-    queryDesc->totaltime = NULL;
-    queryDesc->operation = CMD_SELECT;
-    queryDesc->plannedstmt->stmt_location = 0;
-    queryDesc->plannedstmt->stmt_len = 0;
+    /*
+     * SPI_plan_get_cached_plan returns a CachedPlan*, not a PlannedStmt*.
+     * CachedPlan's first field is `int magic` (CACHEDPLAN_MAGIC), not a
+     * NodeTag — reading it as a PlannedStmt* makes ExecutorStart read a
+     * garbage tag ("unrecognized node type: 474" on PG18). Extract the
+     * PlannedStmt from stmt_list and build the desc with CreateQueryDesc,
+     * which initialises every field the executor reads (the hand-rolled
+     * palloc leaves queryEnv and instrument_options uninitialised).
+     */
+    CachedPlan *cplan = SPI_plan_get_cached_plan(plan);
+    if (cplan == NULL || cplan->stmt_list == NIL)
+        ereport(ERROR, (errmsg("kwabi: SPI plan produced no PlannedStmt")));
 
-    /* Start the executor */
-    KwabiEState estate = api->executor_start(*queryDesc, 0);
+    PlannedStmt *pstmt = linitial_node(PlannedStmt, cplan->stmt_list);
+    pstmt->stmt_location = 0;
+    pstmt->stmt_len = 0;
+
+    /*
+     * The active snapshot was taken before the INSERTs above, so it cannot
+     * see their rows (count=0). Take a snapshot that includes them.
+     */
+    PushActiveSnapshot(GetTransactionSnapshot());
+
+    QueryDesc *queryDesc = CreateQueryDesc(pstmt,
+                                "SELECT val FROM kwabi_exec_t",
+                                GetActiveSnapshot(), InvalidSnapshot,
+                                CreateDestReceiver(DestSPI), NULL, NULL, 0);
+    queryDesc->operation = CMD_SELECT;
+
+    /* Start the executor. QueryDesc is an opaque handle: pass the pointer. */
+    KwabiEState estate = api->executor_start(queryDesc, 0);
     if (estate == NULL) {
         SPI_finish();
         ereport(ERROR, (errmsg("kwabi: executor_start returned NULL")));
@@ -281,6 +301,7 @@ kwabi_executor_test(PG_FUNCTION_ARGS)
     /* Finish and end */
     api->executor_finish(estate);
     api->executor_end(estate);
+    PopActiveSnapshot();
 
     SPI_finish();
 

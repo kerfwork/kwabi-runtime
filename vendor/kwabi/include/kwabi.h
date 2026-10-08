@@ -134,6 +134,12 @@ typedef void *KwabiOutputPluginCallbacks;
 typedef void *KwabiList;
 typedef void *KwabiPlan;
 typedef void *KwabiSlot;
+typedef void *KwabiQueryDesc;
+typedef void *KwabiIntoClause;
+typedef void *KwabiExplainState;
+typedef void *KwabiParamListInfo;
+typedef void *KwabiQueryEnvironment;
+typedef void *KwabiSnapshot;
 
 /* ========================================================================
  * Basic type aliases (matching PostgreSQL's types)
@@ -180,12 +186,6 @@ typedef void*    StringInfo;
 typedef void*    List;
 typedef void*    Node;
 typedef void*    Plan;
-typedef void*    QueryDesc;
-typedef void*    IntoClause;
-typedef void*    ExplainState;
-typedef void*    ParamListInfo;
-typedef void*    QueryEnvironment;
-typedef void*    Snapshot;
 typedef void*    ScanKey;
 typedef void*    VacuumParams;
 typedef void*    BufferAccessStrategy;
@@ -718,7 +718,7 @@ typedef struct KwabiV1 {
     void (*syscache_free_tuple)(HeapTuple tuple);
 
     /* ---- Optimizer ---- */
-    KwabiPlannerInfo (*planner_info)(KwabiNode parse, int cursorOptions, ParamListInfo boundParams);
+    KwabiPlannerInfo (*planner_info)(KwabiNode parse, int cursorOptions, KwabiParamListInfo boundParams);
     void (*free_planner_info)(KwabiPlannerInfo info);
     double (*planner_estimate_rows)(KwabiPlannerInfo info, KwabiList quals);
     double (*planner_estimate_cost)(KwabiPlannerInfo info, KwabiList quals);
@@ -809,7 +809,7 @@ typedef struct KwabiV1 {
 
     /* ---- Table AM ---- */
     KwabiTableAm (*table_am_get)(Oid relid);
-    TableScanDesc (*table_am_beginscan)(KwabiTableAm am, Snapshot snapshot, int nkeys, ScanKey key);
+    TableScanDesc (*table_am_beginscan)(KwabiTableAm am, KwabiSnapshot snapshot, int nkeys, ScanKey key);
     void (*table_am_endscan)(TableScanDesc scan);
     bool (*table_am_getnext)(TableScanDesc scan, KwabiSlot slot);
     void (*table_am_insert)(KwabiTableAm am, KwabiSlot slot, int options, BulkInsertState bistate);
@@ -817,7 +817,7 @@ typedef struct KwabiV1 {
     void (*table_am_delete)(KwabiTableAm am, KwabiSlot slot, int options);
 
     /* ---- Executor ---- */
-    KwabiEState (*executor_start)(QueryDesc queryDesc, int eflags);
+    KwabiEState (*executor_start)(KwabiQueryDesc queryDesc, int eflags);
     void (*executor_run)(KwabiEState estate, int direction, long count, bool execute_once);
     void (*executor_finish)(KwabiEState estate);
     void (*executor_end)(KwabiEState estate);
@@ -849,7 +849,7 @@ typedef struct KwabiV1 {
     void (*guc_set_float)(const char *name, double value);
 
     /* ---- Explain ---- */
-    void (*explain_query)(QueryDesc queryDesc, IntoClause into, ExplainState es, const char *queryString, ParamListInfo params, QueryEnvironment queryEnv);
+    void (*explain_query)(KwabiQueryDesc queryDesc, KwabiIntoClause into, KwabiExplainState es, const char *queryString, KwabiParamListInfo params, KwabiQueryEnvironment queryEnv);
     const char *(*explain_get_index_name)(Oid indexOid);
 
     /* ---- Vacuum ---- */

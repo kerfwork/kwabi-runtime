@@ -33,11 +33,11 @@ CREATE FUNCTION kwabi_executor_control()
 \echo ''
 \echo '=== 1. executor_start + executor_run + executor_getnext + executor_finish + executor_end ==='
 \echo '   must start, run, get 3 rows, and finish cleanly'
-SELECT kwabi_executor_test() AS executor_lifecycle;
+SELECT kwabi_executor_test() = 'executor_test: count=3' AS executor_lifecycle;
 
 \echo ''
 \echo '=== 2. the backend survived the executor ==='
-SELECT kwabi_executor_test() AS after_executor;
+SELECT kwabi_executor_test() = 'executor_test: count=3' AS after_executor;
 
 \echo ''
 \echo '=== 3. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='

@@ -59,7 +59,7 @@ void
 init_group_tableam(void)
 {
     shim_table.table_am_get = shim_table_am_get;
-    shim_table.table_am_beginscan = shim_table_am_beginscan;
+    shim_table.table_am_beginscan = (TableScanDesc (*)(KwabiTableAm, KwabiSnapshot, int, ScanKey)) shim_table_am_beginscan;
     shim_table.table_am_endscan = shim_table_am_endscan;
     shim_table.table_am_getnext = shim_table_am_getnext;
     shim_table.table_am_insert = shim_table_am_insert;

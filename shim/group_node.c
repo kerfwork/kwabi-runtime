@@ -471,7 +471,7 @@ init_group_node(void)
     shim_table.planned_stmt_is_utility = shim_planned_stmt_is_utility;
     shim_table.planner_estimate_rows = shim_planner_estimate_rows;
     shim_table.planner_estimate_cost = shim_planner_estimate_cost;
-    shim_table.planner_info = shim_planner_info;
+    shim_table.planner_info = (KwabiPlannerInfo (*)(KwabiNode, int, KwabiParamListInfo)) shim_planner_info;
     shim_table.free_planner_info = shim_free_planner_info;
     shim_table.walsender_is_connected = shim_walsender_is_connected;
     shim_table.walsender_send = shim_walsender_send;
