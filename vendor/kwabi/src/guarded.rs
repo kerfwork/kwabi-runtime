@@ -286,6 +286,7 @@ pub const KWABI_CAP_STRUCTURED_ERRORS: u64 = 1 << 1;
 pub const KWABI_CAP_ERROR_FIREWALL: u64 = 1 << 2;
 pub const KWABI_CAP_MEMORY_INTROSPECTION: u64 = 1 << 3;
 pub const KWABI_CAP_ATOMIC_BODY: u64 = 1 << 4;
+pub const KWABI_CAP_SLRU: u64 = 1 << 5;
 
 /// What a runtime GUARANTEES, as distinct from which slots exist.
 ///
@@ -315,6 +316,17 @@ impl Capabilities {
         self.has(KWABI_CAP_STRUCTURED_ERRORS)
     }
 
+    /// Is SLRU actually usable here, or merely present?
+    ///
+    /// The question an extension must ask before calling `slru_create`. The
+    /// slots are wired on every runtime, so testing them tells you nothing;
+    /// this bit is set only when the runtime was loaded via
+    /// shared_preload_libraries and an SLRU was declared. Without it,
+    /// `slru_create` raises "requires preload".
+    pub fn slru(self) -> bool {
+        self.has(KWABI_CAP_SLRU)
+    }
+
     /// Names of the set bits, for logging and error messages.
     pub fn names(self) -> String {
         let table = [
@@ -323,6 +335,7 @@ impl Capabilities {
             (KWABI_CAP_ERROR_FIREWALL, "ERROR_FIREWALL"),
             (KWABI_CAP_MEMORY_INTROSPECTION, "MEMORY_INTROSPECTION"),
             (KWABI_CAP_ATOMIC_BODY, "ATOMIC_BODY"),
+            (KWABI_CAP_SLRU, "SLRU"),
         ];
         let set: Vec<&str> = table
             .iter()
@@ -677,13 +690,34 @@ mod capability_tests {
                 | KWABI_CAP_STRUCTURED_ERRORS
                 | KWABI_CAP_ERROR_FIREWALL
                 | KWABI_CAP_MEMORY_INTROSPECTION
-                | KWABI_CAP_ATOMIC_BODY,
+                | KWABI_CAP_ATOMIC_BODY
+                | KWABI_CAP_SLRU,
         );
         assert_eq!(
             all.names(),
-            "CORE|STRUCTURED_ERRORS|ERROR_FIREWALL|MEMORY_INTROSPECTION|ATOMIC_BODY"
+            "CORE|STRUCTURED_ERRORS|ERROR_FIREWALL|MEMORY_INTROSPECTION|ATOMIC_BODY|SLRU"
         );
         assert_eq!(Capabilities(0).names(), "(none)");
         assert_eq!(Capabilities(KWABI_CAP_CORE).names(), "CORE");
+    }
+
+    /// `slru()` answers the preload question, which no slot test can.
+    ///
+    /// The SLRU slots are wired whether or not the runtime was preloaded, so
+    /// testing the slot cannot distinguish "usable" from "present but will
+    /// raise". This bit is the only signal, and it must not be conflated with
+    /// CORE: an implementation that returned CORE's answer here would pass a
+    /// sloppier test and fail this one.
+    #[test]
+    fn slru_is_a_guarantee_not_a_slot_presence() {
+        // A runtime that wired the slots but was NOT preloaded: CORE only.
+        let not_preloaded = Capabilities(KWABI_CAP_CORE);
+        assert!(
+            !not_preloaded.slru(),
+            "CORE alone must not imply SLRU is usable"
+        );
+
+        let preloaded = Capabilities(KWABI_CAP_CORE | KWABI_CAP_SLRU);
+        assert!(preloaded.slru());
     }
 }

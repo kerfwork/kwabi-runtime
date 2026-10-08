@@ -35,7 +35,11 @@
 #include "storage/bufpage.h"    /* Page */
 #include "storage/lwlock.h"     /* LWLock */
 #include "storage/s_lock.h"     /* slock_t */
-#include "storage/shmem.h"      /* ShmemAlloc, ShmemInitStruct */
+#include "storage/shmem.h"      /* ShmemAlloc, ShmemInitStruct, RequestAddinShmemSpace */
+#include "storage/ipc.h"        /* shmem_request_hook, shmem_startup_hook */
+#include "miscadmin.h"          /* process_shared_preload_libraries_in_progress */
+#include "storage/fd.h"         /* MakePGDirectory */
+#include "access/slru.h"        /* SlruCtl, SimpleLruInit, SimpleLruShmemSize */
 #include "nodes/pg_list.h"      /* List */
 #include "nodes/nodes.h"        /* Node */
 #include "nodes/primnodes.h"    /* IntoClause */
@@ -148,6 +152,20 @@ extern void init_group_lock(void);
 extern void init_group_extension(void);
 extern void init_group_explain(void);
 extern void init_group_transaction(void);
+extern void init_group_executor(void);
 extern void init_group_bgworker(void);
+extern void init_group_slru(void);
+
+/* ── SLRU group: preload hooks + the create/attach path ────────────────── */
+
+/* Called from _PG_init. Registers the shmem request/startup hooks. Returns
+ * true if the runtime is being loaded via shared_preload_libraries, false if
+ * it is a plain LOAD (in which case SLRU is unavailable and the capability
+ * bit must not be claimed). */
+extern bool shim_slru_install_hooks(void);
+
+/* True if the preload hooks ran and at least one SLRU was initialised at
+ * startup. Read by the capability computation. */
+extern bool shim_slru_is_available(void);
 
 #endif /* SHIM_INTERNAL_H */

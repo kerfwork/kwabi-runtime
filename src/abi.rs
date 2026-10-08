@@ -19,11 +19,13 @@ pub const KWABI_CAP_STRUCTURED_ERRORS: u64 = 1 << 1;
 pub const KWABI_CAP_ERROR_FIREWALL: u64 = 1 << 2;
 pub const KWABI_CAP_MEMORY_INTROSPECTION: u64 = 1 << 3;
 pub const KWABI_CAP_ATOMIC_BODY: u64 = 1 << 4;
+pub const KWABI_CAP_SLRU: u64 = 1 << 5;
 pub const KWABI_CAP_ALL: u64 = KWABI_CAP_CORE
     | KWABI_CAP_STRUCTURED_ERRORS
     | KWABI_CAP_ERROR_FIREWALL
     | KWABI_CAP_MEMORY_INTROSPECTION
-    | KWABI_CAP_ATOMIC_BODY;
+    | KWABI_CAP_ATOMIC_BODY
+    | KWABI_CAP_SLRU;
 
 /// Stable ABI version published by this runtime.
 pub const KWABI_VERSION: u32 = 1;
@@ -214,10 +216,6 @@ pub struct KwabiV1 {
     pub free_planner_info: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub planner_estimate_rows: Option<unsafe extern "C" fn(*mut c_void, *mut c_void) -> f64>,
     pub planner_estimate_cost: Option<unsafe extern "C" fn(*mut c_void, *mut c_void) -> f64>,
-    pub transaction_start: Option<unsafe extern "C" fn() -> ()>,
-    pub transaction_commit: Option<unsafe extern "C" fn() -> ()>,
-    pub transaction_abort: Option<unsafe extern "C" fn() -> ()>,
-    pub transaction_is_active: Option<unsafe extern "C" fn() -> bool>,
     pub transaction_get_current_xid: Option<unsafe extern "C" fn() -> i64>,
     pub shmem_alloc: Option<unsafe extern "C" fn(usize) -> *mut c_void>,
     pub shmem_free: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
@@ -321,7 +319,7 @@ pub struct KwabiV1 {
     pub vacuum_rel: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> ()>,
     pub vacuum_analyze_rel:
         Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> ()>,
-    pub trigger_desc: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
+    pub trigger_desc: Option<unsafe extern "C" fn(u32) -> *mut *mut c_void>,
     pub trigger_count: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     pub trigger_get: Option<unsafe extern "C" fn(*mut c_void, c_int) -> *mut c_void>,
     pub reorderbuffer_get_lsn: Option<unsafe extern "C" fn(*mut c_void) -> i64>,
@@ -360,7 +358,7 @@ pub struct KwabiV1 {
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 205;
+    pub const FIELD_COUNT: usize = 201;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -448,10 +446,6 @@ impl Default for KwabiV1 {
             free_planner_info: None,
             planner_estimate_rows: None,
             planner_estimate_cost: None,
-            transaction_start: None,
-            transaction_commit: None,
-            transaction_abort: None,
-            transaction_is_active: None,
             transaction_get_current_xid: None,
             shmem_alloc: None,
             shmem_free: None,

@@ -27,25 +27,31 @@ shim_guc_get_int(const char *name)
     return value;
 }
 
+/*
+ * Result is assigned inside PG_TRY and returned AFTER PG_END_TRY. Returning
+ * from between the two would skip the restore of PG_exception_stack and crash
+ * the next ereport. See group_extension.c for the full note.
+ */
 static const char *
 shim_guc_get_string(const char *name)
 {
-    char        *str;
+    const char *result = NULL;
 
     if (name == NULL)
         return NULL;
 
     PG_TRY();
     {
-        str = GetConfigOptionByName(name, NULL, false);
-        return str;
+        result = GetConfigOptionByName(name, NULL, false);
     }
     PG_CATCH();
     {
         shim_capture_error();
-        return NULL;
+        result = NULL;
     }
     PG_END_TRY();
+
+    return result;
 }
 
 static bool

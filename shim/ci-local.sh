@@ -91,6 +91,25 @@ data_for() {
     echo "$(cd .. && pwd)/pg$1/data"
 }
 
+# SLRU runs against its OWN throwaway cluster, not the matrix server on :$PORT.
+# It needs the runtime in shared_preload_libraries and an SLRU declared in
+# kwabi.slrus, and neither can be changed on a running server (both are
+# PGC_POSTMASTER). Restarting the matrix server with preload would change the
+# environment every other check runs in — and a preloaded runtime is exactly the
+# condition under which the SLRU capability bit flips on. So the stage starts a
+# private cluster, runs, and tears it down.
+slru_port_for() {
+    case "$1" in
+        16) echo 5464 ;;
+        17) echo 5463 ;;
+        18) echo 5462 ;;
+    esac
+}
+
+slru_data_for() {
+    echo "${TMPDIR:-/tmp}/kwabi-slru-pg$1"
+}
+
 # The unix-socket directory differs by platform: macOS PostgreSQL defaults to
 # /tmp, Debian/Ubuntu to /var/run/postgresql. Probing for the directory is not
 # enough -- Debian creates /var/run/postgresql even when the server is listening
@@ -992,15 +1011,19 @@ for M in "${MAJORS[@]}"; do
         echo "      see $OUT"
     fi
 
-    # --- transaction-api: transaction slots through the ABI ----------------
+    # --- transaction-api: the transaction accessor through the ABI ---------
     #
-    # The transaction group: start, commit, abort, is_active, get_current_xid.
-    # The assertion that matters is `transaction_lifecycle` — it proves that
-    # transaction_start, transaction_is_active, transaction_get_current_xid,
-    # and transaction_commit all work together.
+    # The transaction group has ONE slot now: transaction_get_current_xid. An
+    # extension reached from SQL is already inside a transaction and cannot
+    # start/commit/abort one, so those slots were removed (see kwabi.h
+    # Transactions). Two assertions carry the meaning:
+    #   * transaction_lifecycle  — a write assigns an XID and the accessor sees
+    #                              a non-zero id;
+    #   * unassigned_xid_is_zero — the accessor is a PURE READ: a read-only
+    #                              transaction reports 0 (it does not allocate).
     #
-    # ON_ERROR_STOP is off: check 5 (the negative control) raises by design.
-    echo "  [transaction-api] transaction slots against :$PORT"
+    # ON_ERROR_STOP is off: the negative control raises by design.
+    echo "  [transaction-api] transaction accessor against :$PORT"
     OUT=/tmp/kwabi_transaction_$M.log
     "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
         -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
@@ -1010,14 +1033,15 @@ for M in "${MAJORS[@]}"; do
     TXN_FALSE=$(grep -cE '^ f *$' "$OUT")
     # The control must have RAISED. Its message is the proof it fired.
     TXN_CONTROL=$(grep -c "transaction negative control fired as intended" "$OUT")
-    # The one that carries the meaning.
+    # The two that carry the meaning.
     TXN_LIFECYCLE=$(grep -A2 'transaction_lifecycle' "$OUT" | grep -cE '^ t')
+    TXN_PURE=$(grep -A2 'unassigned_xid_is_zero' "$OUT" | grep -cE '^ t')
 
     if [ "$TXN_FALSE" -eq 0 ] && [ "$TXN_CONTROL" -ge 1 ] && \
-       [ "$TXN_LIFECYCLE" -ge 1 ]; then
+       [ "$TXN_LIFECYCLE" -ge 1 ] && [ "$TXN_PURE" -ge 1 ]; then
         record PASS "$M" "transaction-api green ($TXN_TRUE assertions)"
     else
-        record FAIL "$M" "transaction-api: true=$TXN_TRUE false=$TXN_FALSE control=$TXN_CONTROL lifecycle=$TXN_LIFECYCLE"
+        record FAIL "$M" "transaction-api: true=$TXN_TRUE false=$TXN_FALSE control=$TXN_CONTROL lifecycle=$TXN_LIFECYCLE pure=$TXN_PURE"
         echo "      see $OUT"
     fi
 
@@ -1127,6 +1151,72 @@ for M in "${MAJORS[@]}"; do
         record FAIL "$M" "errsize: v1=$ERR_V1 v2=$ERR_V2 asserts=$ERR_ASSERT"
         echo "      see $OUT"
     fi
+
+    # --- slru-api: the SLRU group, against its OWN preload cluster ----------
+    #
+    # SLRU is the one group that cannot use the matrix server. It needs the
+    # runtime in shared_preload_libraries and an SLRU declared in kwabi.slrus,
+    # both PGC_POSTMASTER. This stage starts a private cluster, runs the test,
+    # and tears it down, so the matrix server's environment is untouched.
+    #
+    # The assertions that carry meaning, beyond "no false":
+    #   * the page round-trip (read_back_matches) — real disk I/O, not just a
+    #     shared-memory buffer;
+    #   * BOTH negative controls must RAISE (an undeclared name; a buffer-count
+    #     mismatch). A control that returns a row means the create path is
+    #     vacuous.
+    #   * the SLRU capability bit must be SET here. capabilities.sql asserts it
+    #     is CLEAR on the non-preloaded matrix server; the pair is the two-way
+    #     control for the bit tracking the load model.
+    SLRU_PORT=$(slru_port_for "$M")
+    SLRU_DATA=$(slru_data_for "$M")
+    echo "  [slru-api] SLRU group against a preload cluster on :$SLRU_PORT"
+
+    rm -rf "$SLRU_DATA"
+    LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" \
+        "$PGB/initdb" -D "$SLRU_DATA" -U "$(whoami)" \
+        --encoding=UTF8 --locale=C >/dev/null 2>&1
+    printf "shared_preload_libraries = 'kwabi_runtime_pg%s.%s'\nkwabi.slrus = 'kwabitest'\nport = %s\nlisten_addresses = 'localhost'\nunix_socket_directories = '%s'\n" \
+        "$M" "$DLSUFFIX" "$SLRU_PORT" "$PSOCK" > "$SLRU_DATA/postgresql.auto.conf"
+
+    OUT=/tmp/kwabi_slru_$M.log
+    SLRU_STARTED=0
+    if LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" \
+        "$PGB/pg_ctl" -D "$SLRU_DATA" -l "$SLRU_DATA/server.log" -w start >/dev/null 2>&1; then
+        SLRU_STARTED=1
+    fi
+
+    if [ $SLRU_STARTED -eq 0 ]; then
+        record FAIL "$M" "slru-api: preload cluster would not start"
+        echo "      see $SLRU_DATA/server.log"
+        tail -3 "$SLRU_DATA/server.log" 2>/dev/null | sed 's/^/      /'
+    else
+        "$PGB/psql" -h "$PSOCK" -p "$SLRU_PORT" -v ON_ERROR_STOP=0 \
+            -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+            -f slru-api.sql postgres >"$OUT" 2>&1
+
+        SLRU_TRUE=$(grep -cE '^ t *$' "$OUT")
+        SLRU_FALSE=$(grep -cE '^ f *$' "$OUT")
+        # Both controls must have RAISED. Their messages are the proof.
+        SLRU_CTL1=$(grep -c "was not declared" "$OUT")
+        SLRU_CTL2=$(grep -c "declared with 16 buffers" "$OUT")
+        # The assertions that carry the meaning.
+        SLRU_RT=$(grep -A2 'read_back_matches' "$OUT" | grep -cE '^ t')
+        SLRU_CAPBIT=$(grep -A2 'slru_bit_set_when_preloaded' "$OUT" | grep -cE '^ t')
+
+        if [ "$SLRU_FALSE" -eq 0 ] && [ "$SLRU_CTL1" -ge 1 ] && \
+           [ "$SLRU_CTL2" -ge 1 ] && [ "$SLRU_RT" -ge 1 ] && \
+           [ "$SLRU_CAPBIT" -ge 1 ]; then
+            record PASS "$M" "slru-api green ($SLRU_TRUE assertions, preload cluster)"
+        else
+            record FAIL "$M" "slru-api: true=$SLRU_TRUE false=$SLRU_FALSE ctl1=$SLRU_CTL1 ctl2=$SLRU_CTL2 roundtrip=$SLRU_RT capbit=$SLRU_CAPBIT"
+            echo "      see $OUT"
+        fi
+
+        LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" \
+            "$PGB/pg_ctl" -D "$SLRU_DATA" -w stop >/dev/null 2>&1 || true
+    fi
+    rm -rf "$SLRU_DATA"
 done
 
 # ---------------------------------------------------------------------------

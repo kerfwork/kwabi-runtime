@@ -192,10 +192,11 @@ pub struct KwabiV1 {
     pub planner_estimate_rows: extern "C" fn(*mut KwabiPlannerInfo, *mut std::ffi::c_void) -> f64,
     pub planner_estimate_cost: extern "C" fn(*mut KwabiPlannerInfo, *mut std::ffi::c_void) -> f64,
     // Transactions
-    pub transaction_start: extern "C" fn(),
-    pub transaction_commit: extern "C" fn(),
-    pub transaction_abort: extern "C" fn(),
-    pub transaction_is_active: extern "C" fn() -> bool,
+    //
+    // Only the identity accessor. An extension reached from SQL is already
+    // inside a transaction, so start/commit/abort are not an ABI surface it can
+    // use (see the Transactions block in kwabi.h). `transaction_get_current_xid`
+    // returns 0 when the current transaction has no assigned XID yet.
     pub transaction_get_current_xid: extern "C" fn() -> i64,
     // Storage
     pub shmem_alloc: extern "C" fn(usize) -> *mut std::ffi::c_void,
@@ -796,24 +797,17 @@ impl Kwabi {
 
     // ---- Transactions ----
 
-    /// Start a transaction.
-    pub fn transaction_start(&self) {
-        (self.api.transaction_start)();
-    }
-
-    /// Commit the current transaction.
-    pub fn transaction_commit(&self) {
-        (self.api.transaction_commit)();
-    }
-
-    /// Abort the current transaction.
-    pub fn transaction_abort(&self) {
-        (self.api.transaction_abort)();
-    }
-
-    /// Check if a transaction is active.
-    pub fn transaction_is_active(&self) -> bool {
-        (self.api.transaction_is_active)()
+    /// The current top-level transaction id, or 0 when none is assigned yet.
+    ///
+    /// Non-allocating: asking does not force an XID into existence, so this is
+    /// safe to call for tagging without changing transaction behaviour. 0 is
+    /// the honest answer for a read-only transaction, not an error.
+    ///
+    /// There is deliberately no start/commit/abort here: an extension called
+    /// from SQL is already inside a transaction and cannot control its
+    /// boundaries. Use the runtime's `try_body` for partial-rollback atomicity.
+    pub fn current_xid(&self) -> i64 {
+        (self.api.transaction_get_current_xid)()
     }
 
     // ---- GUC ----

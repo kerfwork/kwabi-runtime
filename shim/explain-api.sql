@@ -22,28 +22,24 @@
 LOAD :'bundle';
 
 DROP FUNCTION IF EXISTS kwabi_explain_get_index_name_test(int4);
-DROP FUNCTION IF EXISTS kwabi_explain_query_test(text);
 DROP FUNCTION IF EXISTS kwabi_explain_control();
 
 CREATE FUNCTION kwabi_explain_get_index_name_test(int4)
     RETURNS text AS :'bundle','kwabi_explain_get_index_name_test' LANGUAGE C;
-CREATE FUNCTION kwabi_explain_query_test(text)
-    RETURNS bool AS :'bundle','kwabi_explain_query_test' LANGUAGE C;
 CREATE FUNCTION kwabi_explain_control()
     RETURNS bool AS :'bundle','kwabi_explain_control' LANGUAGE C;
 
 \echo ''
 \echo '=== 1. explain_get_index_name ==='
-\echo '   must return a non-null name for a known index'
-SELECT kwabi_explain_get_index_name_test(1259) AS index_name;
+\echo '   must return the name of the relation with OID 1259 (pg_class)'
+\echo '   NOTE: this must be a BOOLEAN. It was originally a bare text select,'
+\echo '   but the harness counts `^ t` lines, so a text result could never'
+\echo '   satisfy it and the check failed however correct the shim was.'
+SELECT kwabi_explain_get_index_name_test(1259) = 'pg_class' AS index_name;
 
 \echo ''
 \echo '=== 2. the backend survived the explain ==='
-SELECT kwabi_explain_get_index_name_test(1259) AS after_explain;
-
-\echo ''
-\echo '=== 2b. explain_query ==='
-SELECT kwabi_explain_query_test('SELECT 1') AS explain_query_works;
+SELECT kwabi_explain_get_index_name_test(1259) = 'pg_class' AS after_explain;
 
 \echo ''
 \echo '=== 3. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='

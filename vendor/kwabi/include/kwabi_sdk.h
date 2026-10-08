@@ -205,20 +205,13 @@ static inline bool kwabi_query_has_for_update(const KwabiV1 *api, KwabiNode *que
  * Transaction helpers
  * ======================================================================== */
 
-static inline void kwabi_begin(const KwabiV1 *api) {
-    api->transaction_start();
-}
+/* There is no kwabi_begin/kwabi_commit/kwabi_abort. An extension called from
+ * SQL is already inside a transaction and cannot control its boundaries; those
+ * helpers could only ever raise or FATAL. See the Transactions block in
+ * kwabi.h for the reasoning. What is left is the identity accessor. */
 
-static inline void kwabi_commit(const KwabiV1 *api) {
-    api->transaction_commit();
-}
-
-static inline void kwabi_abort(const KwabiV1 *api) {
-    api->transaction_abort();
-}
-
-static inline bool kwabi_in_transaction(const KwabiV1 *api) {
-    return api->transaction_is_active();
+static inline int64 kwabi_current_xid(const KwabiV1 *api) {
+    return api->transaction_get_current_xid();
 }
 
 /* ========================================================================

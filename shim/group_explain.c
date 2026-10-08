@@ -8,27 +8,33 @@
 
 /*
  * shim_explain_get_index_name - get an index name through the ABI
+ *
+ * Result is assigned inside PG_TRY and returned AFTER PG_END_TRY. Returning
+ * from between the two would skip the restore of PG_exception_stack and crash
+ * the next ereport. See group_extension.c for the full note.
  */
 static const char *
 shim_explain_get_index_name(Oid indexOid)
 {
+    const char *result = NULL;
+
     if (!OidIsValid(indexOid))
         return NULL;
 
     PG_TRY();
     {
         Relation indexRel = relation_open(indexOid, AccessShareLock);
-        const char *name = RelationGetRelationName(indexRel);
-        char *result = pstrdup(name);
+        result = pstrdup(RelationGetRelationName(indexRel));
         relation_close(indexRel, AccessShareLock);
-        return result;
     }
     PG_CATCH();
     {
         shim_capture_error();
-        return NULL;
+        result = NULL;
     }
     PG_END_TRY();
+
+    return result;
 }
 
 /*

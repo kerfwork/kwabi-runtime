@@ -283,7 +283,17 @@ _PG_init(void)
     init_group_extension();
     init_group_explain();
     init_group_transaction();
+    init_group_executor();
     init_group_bgworker();
+    init_group_slru();
+
+    /*
+     * SLRU is the one group that must also touch the preload path: it needs
+     * shmem reserved before fork. This installs the hooks when the runtime is
+     * being preloaded, and records "not preloaded" when it is a plain LOAD so
+     * the capability bit can stay honest.
+     */
+    (void) shim_slru_install_hooks();
 
     /*
      * The catching direction is shim-owned for the same reason: it needs
@@ -430,7 +440,19 @@ kwabi_raise_test(PG_FUNCTION_ARGS)
 uint64_t
 shim_capabilities(void)
 {
-    return kwabi_capabilities_of(&shim_table, (uint32_t) (PG_VERSION_NUM / 10000));
+    uint64_t caps = kwabi_capabilities_of(&shim_table, (uint32_t) (PG_VERSION_NUM / 10000));
+
+    /*
+     * SLRU is the one bit the runtime cannot compute for itself. The slots are
+     * wired whether or not the runtime was preloaded, so slot presence says
+     * nothing; only the shim knows whether the preload hooks ran and an SLRU
+     * was actually initialised. So the shim ORs the bit in here rather than the
+     * runtime guessing it.
+     */
+    if (shim_slru_is_available())
+        caps |= KWABI_CAP_SLRU;
+
+    return caps;
 }
 
 PG_FUNCTION_INFO_V1(kwabi_capabilities);
@@ -4041,8 +4063,8 @@ kwabi_stringinfo_test(PG_FUNCTION_ARGS)
     /* 1. Init */
     api->stringinfo_init(&str);
 
-    /* 2. Append "hello " */
-    api->stringinfo_append(&str, "hello ");
+    /* 2. Append "hello" (no trailing space: the char below supplies it) */
+    api->stringinfo_append(&str, "hello");
 
     /* 3. Append a space char */
     api->stringinfo_append_char(&str, ' ');
@@ -4054,7 +4076,12 @@ kwabi_stringinfo_test(PG_FUNCTION_ARGS)
     const char *data = api->stringinfo_data(&str);
     int len = api->stringinfo_len(&str);
 
-    /* Build result text */
+    /*
+     * Copy the data out BEFORE the reset/free below. `data` points into the
+     * StringInfo's own buffer, so reading it after pfree is a use-after-free —
+     * which is exactly what made the original failure report data="" instead
+     * of the real contents.
+     */
     char buf[256];
     snprintf(buf, sizeof(buf), "%s", data ? data : "(null)");
 
@@ -4066,15 +4093,15 @@ kwabi_stringinfo_test(PG_FUNCTION_ARGS)
     if (str.data != NULL)
         pfree(str.data);
 
-    /* Return the data if length matches expectation */
-    if (len == 7 && len_after_reset == 0 && data != NULL && strcmp(data, "hello 42") == 0)
+    /* "hello" + ' ' + "42" == "hello 42", which is 8 bytes. */
+    if (len == 8 && len_after_reset == 0 && data != NULL && strcmp(buf, "hello 42") == 0)
         PG_RETURN_TEXT_P(cstring_to_text(buf));
 
-    /* Something went wrong */
+    /* Something went wrong. Report from `buf`, never from the freed `data`. */
     ereport(ERROR,
             (errmsg("kwabi: stringinfo test failed"),
              errdetail("len=%d len_after_reset=%d data=\"%s\"",
-                       len, len_after_reset, data ? data : "(null)")));
+                       len, len_after_reset, buf)));
 }
 
 /*

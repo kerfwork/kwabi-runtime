@@ -705,11 +705,24 @@ typedef struct KwabiV1 {
     double (*planner_estimate_rows)(KwabiPlannerInfo info, List quals);
     double (*planner_estimate_cost)(KwabiPlannerInfo info, List quals);
 
-    /* ---- Transactions ---- */
-    void (*transaction_start)(void);
-    void (*transaction_commit)(void);
-    void (*transaction_abort)(void);
-    bool (*transaction_is_active)(void);
+    /* ---- Transactions ----
+     *
+     * One accessor, deliberately. An extension reached from a SQL-callable
+     * function is ALREADY inside a transaction, so it cannot start, commit or
+     * abort one: the command-level API raises "unexpected state STARTED", and
+     * the block-level API (BeginTransactionBlock/EndTransactionBlock) is the
+     * tcop command-loop state machine that the BEGIN/COMMIT statements drive --
+     * calling EndTransactionBlock() from inside a command is a FATAL that drops
+     * the connection, not a feature. Real transaction boundaries inside a
+     * routine belong to the PL layer (a procedure's COMMIT); partial-rollback
+     * atomicity is already the `try_body` slot's job. So there is no
+     * start/commit/abort surface to expose, and a NULL slot would be a promise
+     * this ABI can never keep. Only the identity accessor is meaningful here.
+     *
+     * Returns the current top-level transaction id, or 0 when the current
+     * transaction has not been assigned one yet (read-only, or no write so
+     * far). Non-allocating on purpose: asking for the id must not force an XID
+     * into existence. 0 is not an error -- it is the honest answer. */
     int64 (*transaction_get_current_xid)(void);
 
     /* ---- Storage ---- */

@@ -87,10 +87,23 @@ extern "C" {
  * which it is. This is the most consequential bit in the set. */
 #define KWABI_CAP_ATOMIC_BODY              (1ULL << 4)
 
+/* The SLRU slots (slru_create/read/write) are FUNCTIONAL, not merely present.
+ *
+ * NOT derivable from a slot test, and this is the clearest case in the set:
+ * the slots are wired on EVERY runtime, preloaded or not, because a NULL slot
+ * would say "not implemented" when the truth is "implemented, but needs a
+ * preload". An extension that tests the slot learns nothing. This bit is the
+ * only way to ask "is SLRU actually usable here?" without calling and
+ * catching the error.
+ *
+ * The runtime sets it only when it was loaded via shared_preload_libraries
+ * AND at least one SLRU was declared and initialised. See group_slru.c. */
+#define KWABI_CAP_SLRU                     (1ULL << 5)
+
 /* Every defined bit, for a runtime that supports the lot. */
 #define KWABI_CAP_ALL \
     (KWABI_CAP_CORE | KWABI_CAP_STRUCTURED_ERRORS | KWABI_CAP_ERROR_FIREWALL | \
-     KWABI_CAP_MEMORY_INTROSPECTION | KWABI_CAP_ATOMIC_BODY)
+     KWABI_CAP_MEMORY_INTROSPECTION | KWABI_CAP_ATOMIC_BODY | KWABI_CAP_SLRU)
 #define KWABI_VERSION KWABI_VERSION_1
 
 /* PostgreSQL version numbers (from pg_config.h) */
@@ -710,11 +723,24 @@ typedef struct KwabiV1 {
     double (*planner_estimate_rows)(KwabiPlannerInfo info, KwabiList quals);
     double (*planner_estimate_cost)(KwabiPlannerInfo info, KwabiList quals);
 
-    /* ---- Transactions ---- */
-    void (*transaction_start)(void);
-    void (*transaction_commit)(void);
-    void (*transaction_abort)(void);
-    bool (*transaction_is_active)(void);
+    /* ---- Transactions ----
+     *
+     * One accessor, deliberately. An extension reached from a SQL-callable
+     * function is ALREADY inside a transaction, so it cannot start, commit or
+     * abort one: the command-level API raises "unexpected state STARTED", and
+     * the block-level API (BeginTransactionBlock/EndTransactionBlock) is the
+     * tcop command-loop state machine that the BEGIN/COMMIT statements drive --
+     * calling EndTransactionBlock() from inside a command is a FATAL that drops
+     * the connection, not a feature. Real transaction boundaries inside a
+     * routine belong to the PL layer (a procedure's COMMIT); partial-rollback
+     * atomicity is already the `try_body` slot's job. So there is no
+     * start/commit/abort surface to expose, and a NULL slot would be a promise
+     * this ABI can never keep. Only the identity accessor is meaningful here.
+     *
+     * Returns the current top-level transaction id, or 0 when the current
+     * transaction has not been assigned one yet (read-only, or no write so
+     * far). Non-allocating on purpose: asking for the id must not force an XID
+     * into existence. 0 is not an error -- it is the honest answer. */
     int64 (*transaction_get_current_xid)(void);
 
     /* ---- Storage ---- */

@@ -108,7 +108,7 @@ CANARY := libcanary.$(DLSUFFIX)
         guard-build guard-test guard-control capabilities cap-consumer fmgr mem-api \
         spi-api type-api guc-api defrem-api parser-api subxact-probe \
         relation-api buffer-lock-api lock-api node-tree-api errsize stringinfo-api shmem-api syscache-api \
-        extension-api \
+        extension-api slru-api \
         build-once ci clean info cluster-start cluster-stop cluster-status
 
 all: build
@@ -129,6 +129,7 @@ SHIM_SRCS := $(wildcard *.c)
 build: $(RELEASE)/libkwabi_runtime.a
 	cc $(SHLIB_FLAGS) -fPIC -Wall -Wextra \
 	   $(PG_CFLAGS) -I$(RUNTIME_DIR) \
+	   -DKWABI_BUNDLE_NAME='"$(BUNDLE)"' \
 	   -o $(BUNDLE) $(SHIM_SRCS) \
 	   $(RUST_LINK_A)
 	@echo "built $(BUNDLE) for PostgreSQL $(PG)"
@@ -361,6 +362,32 @@ guard-control: check install guard-build
 	  -v bundle='$(BUNDLE)' -v libdir='$(PKGLIBDIR)' -v guarded='$(GUARDED)' \
 	  -f guard-control.sql postgres || true
 	@echo "(the abort above is the documented control, not a failure)"
+
+# The SLRU group: create/attach, page write+read, both negative controls.
+#
+# SLRU is the one group that CANNOT run against the ordinary $(PGPORT) server,
+# because it requires the runtime in shared_preload_libraries and an SLRU
+# declared in kwabi.slrus. This target starts a throwaway cluster on its own
+# port and runs the test there, leaving the normal server untouched.
+#
+# The port and data dir are overridable; the default data dir lives outside the
+# repo so it never gets committed.
+SLRU_PORT ?= 5459
+SLRU_DATADIR ?= /tmp/kwabi-slru-pg$(PG)
+
+slru-api: check install
+	@echo "=== starting a preload cluster for PG$(PG) on :$(SLRU_PORT) ==="
+	@rm -rf $(SLRU_DATADIR)
+	@LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 $(PGBIN)/initdb -D $(SLRU_DATADIR) \
+	    -U $$(whoami) --encoding=UTF8 --locale=C >/dev/null
+	@printf "shared_preload_libraries = '$(BUNDLE)'\nkwabi.slrus = 'kwabitest'\nport = $(SLRU_PORT)\nlisten_addresses = 'localhost'\nunix_socket_directories = '$(PSOCK)'\n" \
+	    > $(SLRU_DATADIR)/postgresql.auto.conf
+	@LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 $(PGBIN)/pg_ctl -D $(SLRU_DATADIR) \
+	    -l $(SLRU_DATADIR)/server.log -w start >/dev/null
+	@$(PSQL) -h $(PSOCK) -p $(SLRU_PORT) -v ON_ERROR_STOP=0 \
+	  -v bundle='$(BUNDLE)' \
+	  -f slru-api.sql postgres
+	@LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 $(PGBIN)/pg_ctl -D $(SLRU_DATADIR) -w stop >/dev/null 2>&1 || true
 
 # The panic limitation, isolated. Expect the connection to drop.
 panic-probe: check install

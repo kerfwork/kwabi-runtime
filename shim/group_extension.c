@@ -2,47 +2,67 @@
 
 #include "shim_internal.h"
 
+/*
+ * NOTE ON SHAPE, and it is load-bearing.
+ *
+ * Every function here assigns its result inside the PG_TRY block and returns
+ * it AFTER PG_END_TRY. Returning from between PG_TRY and PG_END_TRY would skip
+ * the macro's restore of the global PG_exception_stack, leaving it aimed at a
+ * stack frame that no longer exists. The backend then appears to work — until
+ * the next ereport(ERROR) longjmps into the dead frame and segfaults. That is
+ * not theoretical: it crashed this backend in extension-api and explain-api
+ * until this shape was adopted. See notes/pg-try-return-hazard.md.
+ */
+
 static Oid
 shim_extension_oid(const char *extname)
 {
+    Oid result = InvalidOid;
+
     if (extname == NULL)
         return InvalidOid;
 
     PG_TRY();
     {
-        Oid result = get_extension_oid(extname, false);
-        return result;
+        result = get_extension_oid(extname, false);
     }
     PG_CATCH();
     {
         shim_capture_error();
-        return InvalidOid;
+        result = InvalidOid;
     }
     PG_END_TRY();
+
+    return result;
 }
 
 static bool
 shim_extension_installed(const char *extname)
 {
+    bool result = false;
+
     if (extname == NULL)
         return false;
 
     PG_TRY();
     {
-        Oid oid = get_extension_oid(extname, true);
-        return OidIsValid(oid);
+        result = OidIsValid(get_extension_oid(extname, true));
     }
     PG_CATCH();
     {
         shim_capture_error();
-        return false;
+        result = false;
     }
     PG_END_TRY();
+
+    return result;
 }
 
 static const char *
 shim_extension_version(const char *extname)
 {
+    const char *result = NULL;
+
     if (extname == NULL)
         return NULL;
 
@@ -50,34 +70,35 @@ shim_extension_version(const char *extname)
     {
         /* Look up the OID first (get_extension_oid is in commands/extension.h) */
         Oid oid = get_extension_oid(extname, true);
-        if (!OidIsValid(oid))
-            return NULL;
 
-        /* Now use EXTENSIONOID syscache (available in all PG versions) */
-        HeapTuple tup = SearchSysCache1(EXTENSIONOID, ObjectIdGetDatum(oid));
-        if (!HeapTupleIsValid(tup))
-            return NULL;
+        if (OidIsValid(oid))
+        {
+            /* EXTENSIONOID syscache is available in all PG versions */
+            HeapTuple tup = SearchSysCache1(EXTENSIONOID, ObjectIdGetDatum(oid));
 
-        bool isnull;
-        Datum ver_datum = SysCacheGetAttr(EXTENSIONOID, tup,
-                                          Anum_pg_extension_extversion,
-                                          &isnull);
-        if (isnull) {
-            ReleaseSysCache(tup);
-            return NULL;
+            if (HeapTupleIsValid(tup))
+            {
+                bool isnull;
+                Datum ver_datum = SysCacheGetAttr(EXTENSIONOID, tup,
+                                                  Anum_pg_extension_extversion,
+                                                  &isnull);
+                if (!isnull)
+                {
+                    /* text_to_cstring pallocs into CurrentMemoryContext */
+                    result = text_to_cstring(DatumGetTextPP(ver_datum));
+                }
+                ReleaseSysCache(tup);
+            }
         }
-
-        /* text_to_cstring pallocs into CurrentMemoryContext */
-        const char *ver = text_to_cstring(DatumGetTextPP(ver_datum));
-        ReleaseSysCache(tup);
-        return ver;
     }
     PG_CATCH();
     {
         shim_capture_error();
-        return NULL;
+        result = NULL;
     }
     PG_END_TRY();
+
+    return result;
 }
 
 void

@@ -8,7 +8,7 @@
 -- Every check is an explicit boolean. The harness counts `t` and `f` rather
 -- than grepping for a message.
 --
--- ON_ERROR_STOP is off: check 8 raises by design (the negative control).
+-- ON_ERROR_STOP is off: check 16 raises by design (the negative control).
 --
 -- NEGATIVE CONTROL. A check that has only ever passed is not evidence, so the
 -- value comparison is run in both directions:
@@ -51,13 +51,10 @@ DROP FUNCTION IF EXISTS kwabi_walsender_is_connected_test();
 DROP FUNCTION IF EXISTS kwabi_node_control();
 DROP FUNCTION IF EXISTS kwabi_planner_info_test(text);
 DROP FUNCTION IF EXISTS kwabi_free_planner_info_test();
-DROP FUNCTION IF EXISTS kwabi_slru_create_test();
 DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_changes_test();
 DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_lsn_test();
 DROP FUNCTION IF EXISTS kwabi_logical_decoding_begin_test();
 DROP FUNCTION IF EXISTS kwabi_logical_decoding_end_test();
-DROP FUNCTION IF EXISTS kwabi_slru_read_test();
-DROP FUNCTION IF EXISTS kwabi_slru_write_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_nextval_test();
 DROP FUNCTION IF EXISTS kwabi_trigger_get_test();
 DROP FUNCTION IF EXISTS kwabi_trigger_desc_test();
@@ -132,8 +129,6 @@ CREATE FUNCTION kwabi_walsender_is_connected_test()
     RETURNS bool AS :'bundle','kwabi_walsender_is_connected_test' LANGUAGE C;
 CREATE FUNCTION kwabi_node_control()
     RETURNS bool AS :'bundle','kwabi_node_control' LANGUAGE C;
-CREATE FUNCTION kwabi_slru_create_test()
-    RETURNS bool AS :'bundle','kwabi_slru_create_test' LANGUAGE C;
 CREATE FUNCTION kwabi_reorderbuffer_get_changes_test()
     RETURNS int4 AS :'bundle','kwabi_reorderbuffer_get_changes_test' LANGUAGE C;
 CREATE FUNCTION kwabi_reorderbuffer_get_lsn_test()
@@ -142,10 +137,6 @@ CREATE FUNCTION kwabi_logical_decoding_begin_test()
     RETURNS bool AS :'bundle','kwabi_logical_decoding_begin_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_decoding_end_test()
     RETURNS bool AS :'bundle','kwabi_logical_decoding_end_test' LANGUAGE C;
-CREATE FUNCTION kwabi_slru_read_test()
-    RETURNS bool AS :'bundle','kwabi_slru_read_test' LANGUAGE C;
-CREATE FUNCTION kwabi_slru_write_test()
-    RETURNS bool AS :'bundle','kwabi_slru_write_test' LANGUAGE C;
 CREATE FUNCTION kwabi_sequence_nextval_test()
     RETURNS int8 AS :'bundle','kwabi_sequence_nextval_test' LANGUAGE C;
 CREATE FUNCTION kwabi_sequence_currval_test()
@@ -332,11 +323,11 @@ SELECT kwabi_autovacuum_is_running_test() = false AS autovacuum_is_running;
 SELECT kwabi_node_control() AS control_should_not_return;
 
 \echo ''
-\echo '=== 14. the backend survived all of the above ==='
+\echo '=== 17. the backend survived all of the above ==='
 SELECT kwabi_node_type('SELECT 42') = 1 AS after_control;
 
 \echo ''
-\echo '=== 15. reorderbuffer_get_changes ==='
+\echo '=== 18. reorderbuffer_get_changes ==='
 \echo '   reorderbuffer_get_changes(NULL, InvalidTransactionId) must return 0'
 SELECT kwabi_reorderbuffer_get_changes_test() = 0 AS reorderbuffer_get_changes;
 
@@ -346,29 +337,20 @@ SELECT kwabi_reorderbuffer_get_changes_test() = 0 AS reorderbuffer_get_changes;
 SELECT kwabi_reorderbuffer_get_lsn_test() = 0 AS reorderbuffer_get_lsn;
 
 \echo ''
-\echo '=== 16. slru_create ==='
-\echo '   slru_create must create an SLRU visible in pg_stat_slru'
-SELECT kwabi_slru_create_test() AS slru_create;
 
 \echo ''
-\echo '=== 17. logical_decoding_begin ==='
+\echo '=== 19. logical_decoding_begin ==='
 \echo '   logical_decoding_begin(InvalidOid, 0) must return NULL'
 SELECT kwabi_logical_decoding_begin_test() AS logical_decoding_begin;
 
 \echo ''
-\echo '=== 18. logical_decoding_end ==='
+\echo '=== 20. logical_decoding_end ==='
 \echo '   logical_decoding_end(NULL) must not crash'
 SELECT kwabi_logical_decoding_end_test() AS logical_decoding_end;
 
 \echo ''
-\echo '=== 19. slru_read ==='
-\echo '   slru_read must be callable and not crash'
-SELECT kwabi_slru_read_test() AS slru_read;
 
 \echo ''
-\echo '=== 20. slru_write ==='
-\echo '   slru_write must be callable and not crash'
-SELECT kwabi_slru_write_test() AS slru_write;
 
 \echo ''
 \echo '=== 21. sequence_nextval ==='

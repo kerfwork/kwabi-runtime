@@ -1,4 +1,4 @@
-/* group_transaction.c — transaction proof functions for the kwabi shim */
+/* group_transaction.c — transaction accessor for the kwabi shim */
 
 #include "shim_internal.h"
 
@@ -6,43 +6,58 @@
  * Transaction shim functions
  * ======================================================================== */
 
-void
-shim_transaction_start(void)
-{
-    StartTransactionCommand();
-}
+/*
+ * There is exactly one transaction slot, and this is it.
+ *
+ * Earlier revisions wired transaction_start/commit/abort/is_active onto
+ * PostgreSQL's BLOCK-level API (BeginTransactionBlock / EndTransactionBlock /
+ * UserAbortTransactionBlock). That was wrong, and measurably so:
+ *
+ *   * The command-level API (StartTransactionCommand) is illegal from inside a
+ *     SQL-callable function: the function is already running inside a command's
+ *     transaction, so it raises "StartTransactionCommand: unexpected state
+ *     STARTED".
+ *   * The block-level API is the tcop command-loop state machine that the
+ *     BEGIN/COMMIT *statements* drive. Driving it from inside a command does
+ *     not nest a transaction -- it corrupts the state machine. Observed:
+ *     "FATAL: EndTransactionBlock: unexpected state BEGIN", which drops the
+ *     connection.
+ *
+ * PostgreSQL has a single flat transaction per session. Real transaction
+ * boundaries inside a routine belong to the PL layer (a procedure's COMMIT,
+ * reachable only through CALL), not to a general extension ABI; and
+ * partial-rollback atomicity is already the `try_body` slot's job (it runs the
+ * body inside PG_TRY and an internal subtransaction). So start/commit/abort are
+ * not a surface this ABI can honestly expose, and a NULL slot would be a
+ * promise it could never keep. They are removed, not nulled.
+ *
+ * What remains is the identity accessor: tag extension state with the current
+ * transaction.
+ */
 
-void
-shim_transaction_commit(void)
-{
-    CommitTransactionCommand();
-}
-
-void
-shim_transaction_abort(void)
-{
-    AbortCurrentTransaction();
-}
-
-bool
-shim_transaction_is_active(void)
-{
-    return IsTransactionBlock();
-}
-
+/*
+ * transaction_get_current_xid — the current top-level transaction id, or 0 if
+ * the transaction has not been assigned one yet.
+ *
+ * GetTopTransactionIdIfAny(), deliberately, NOT GetCurrentTransactionId().
+ * The latter ASSIGNS an XID if none exists yet -- asking for the id would force
+ * one into existence, changing transaction behaviour as a side effect of a
+ * read. Measured: after pg_current_xact_id_if_assigned() reports NULL,
+ * pg_current_xact_id() returns a fresh XID and if_assigned then reports it.
+ * The accessor must be a pure read, so it uses the non-allocating form.
+ *
+ * 0 is the honest answer for a read-only transaction (no write, hence no XID
+ * yet); it is not an error.
+ */
 int64
 shim_transaction_get_current_xid(void)
 {
-    return (int64) GetCurrentTransactionId();
+    return (int64) GetTopTransactionIdIfAny();
 }
 
 void
 init_group_transaction(void)
 {
-    shim_table.transaction_start = shim_transaction_start;
-    shim_table.transaction_commit = shim_transaction_commit;
-    shim_table.transaction_abort = shim_transaction_abort;
-    shim_table.transaction_is_active = shim_transaction_is_active;
     shim_table.transaction_get_current_xid = shim_transaction_get_current_xid;
 }
 
@@ -51,108 +66,42 @@ init_group_transaction(void)
  * ======================================================================== */
 
 /*
- * kwabi_transaction_test() -> text
+ * kwabi_transaction_xid() -> int64
  *
- * Test transaction operations through the ABI.
- * Starts a transaction, checks is_active, gets the xid, commits, and
- * verifies the transaction is no longer active.
+ * Returns the current transaction id straight from the ABI slot, so the SQL
+ * harness can assert on it. This is the whole remaining transaction surface.
  */
-PG_FUNCTION_INFO_V1(kwabi_transaction_test);
+PG_FUNCTION_INFO_V1(kwabi_transaction_xid);
 
 Datum
-kwabi_transaction_test(PG_FUNCTION_ARGS)
+kwabi_transaction_xid(PG_FUNCTION_ARGS)
 {
     if (shim_api == NULL)
         ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
 
-    const KwabiV1 *api = shim_api;
+    if (shim_api->transaction_get_current_xid == NULL)
+        ereport(ERROR, (errmsg("kwabi: transaction slot is not wired")));
 
-    if (api->transaction_start == NULL || api->transaction_commit == NULL ||
-        api->transaction_abort == NULL || api->transaction_is_active == NULL ||
-        api->transaction_get_current_xid == NULL)
-        ereport(ERROR, (errmsg("kwabi: transaction slots are not wired")));
-
-    /* Start a transaction */
-    api->transaction_start();
-
-    /* Must be active */
-    if (!api->transaction_is_active())
-        ereport(ERROR, (errmsg("kwabi: transaction_is_active returned false after start")));
-
-    /* Get the current xid */
-    int64 xid = api->transaction_get_current_xid();
-    if (xid == 0)
-        ereport(ERROR, (errmsg("kwabi: transaction_get_current_xid returned 0")));
-
-    /* Commit */
-    api->transaction_commit();
-
-    /* Must NOT be active */
-    if (api->transaction_is_active())
-        ereport(ERROR, (errmsg("kwabi: transaction_is_active returned true after commit")));
-
-    PG_RETURN_TEXT_P(cstring_to_text(
-        psprintf("transaction_test: xid=%ld", (long) xid)));
-}
-
-/*
- * kwabi_transaction_abort_test() -> bool
- *
- * Test transaction abort through the ABI.
- * Starts a transaction, aborts it, and verifies it is no longer active.
- */
-PG_FUNCTION_INFO_V1(kwabi_transaction_abort_test);
-
-Datum
-kwabi_transaction_abort_test(PG_FUNCTION_ARGS)
-{
-    if (shim_api == NULL)
-        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
-
-    const KwabiV1 *api = shim_api;
-
-    if (api->transaction_start == NULL || api->transaction_abort == NULL ||
-        api->transaction_is_active == NULL)
-        ereport(ERROR, (errmsg("kwabi: transaction slots are not wired")));
-
-    /* Start a transaction */
-    api->transaction_start();
-
-    /* Must be active */
-    if (!api->transaction_is_active())
-        ereport(ERROR, (errmsg("kwabi: transaction_is_active returned false after start")));
-
-    /* Abort */
-    api->transaction_abort();
-
-    /* Must NOT be active */
-    if (api->transaction_is_active())
-        ereport(ERROR, (errmsg("kwabi: transaction_is_active returned true after abort")));
-
-    PG_RETURN_BOOL(true);
+    PG_RETURN_INT64(shim_api->transaction_get_current_xid());
 }
 
 /*
  * kwabi_transaction_control() -> bool
  *
- * The NEGATIVE CONTROL. It asserts a wrong xid, which must fail.
+ * The NEGATIVE CONTROL. It asserts the xid equals a value it cannot be (999),
+ * and must therefore RAISE. If it returns a row instead of erroring, the
+ * equality check above is vacuous. Same standard as fmgr-api.sql and
+ * capabilities-design.md section 5.
  */
 PG_FUNCTION_INFO_V1(kwabi_transaction_control);
 
 Datum
 kwabi_transaction_control(PG_FUNCTION_ARGS)
 {
-    if (shim_api == NULL || shim_api->transaction_start == NULL ||
-        shim_api->transaction_is_active == NULL ||
-        shim_api->transaction_get_current_xid == NULL ||
-        shim_api->transaction_commit == NULL)
-        ereport(ERROR, (errmsg("kwabi: transaction slots are not wired")));
-
-    shim_api->transaction_start();
+    if (shim_api == NULL || shim_api->transaction_get_current_xid == NULL)
+        ereport(ERROR, (errmsg("kwabi: transaction slot is not wired")));
 
     int64 xid = shim_api->transaction_get_current_xid();
-
-    shim_api->transaction_commit();
 
     /* The control's whole point: this comparison must be FALSE. */
     if (xid == 999)
@@ -162,4 +111,3 @@ kwabi_transaction_control(PG_FUNCTION_ARGS)
             (errmsg("kwabi: transaction negative control fired as intended"),
              errdetail("xid is not 999 -- the value comparison is honest")));
 }
-

@@ -212,12 +212,13 @@ fn table_layout_is_stable() {
          field is not a pointer (FIELD_COUNT is generated from kwabi.h)",
         KwabiV1::FIELD_COUNT
     );
-    // Appended slots move this number. That is the intended workflow for an
-    // append-only ABI, and this assertion is what makes the change deliberate:
-    // it cannot happen by accident.
+    // Slots move this number. That is the intended workflow for an append-only
+    // ABI, and this assertion is what makes the change deliberate: it cannot
+    // happen by accident. 205 -> 201 when the four impossible transaction
+    // boundary slots were removed (pre-release; see kwabi.h Transactions).
     assert_eq!(
         KwabiV1::FIELD_COUNT,
-        205,
+        201,
         "field count changed — kwabi.h edited?"
     );
 }

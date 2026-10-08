@@ -16,21 +16,25 @@ static BackgroundWorkerHandle *bgworker_handles[MAX_BGWORKERS];
 static int bgworker_count = 0;
 
 /*
- * The C function that PostgreSQL calls as the background worker's main.
+ * The C function PostgreSQL calls as the background worker's main.
  *
- * PostgreSQL's RegisterDynamicBackgroundWorker takes a library name and
- * function name (strings), not a function pointer. The worker runs in a
- * separate process, so the ABI's bgworker_main_type callback (which is a
- * function pointer in the registering backend's address space) cannot be
- * called directly. Instead, this fixed C function is the entry point, and
- * it calls the callback stored in the registry.
+ * PostgreSQL's RegisterDynamicBackgroundWorker takes a LIBRARY NAME and a
+ * FUNCTION NAME (strings), because the worker runs in a separate process with
+ * no access to the registering backend's address space. So this entry point
+ * must be a non-static, exported symbol in the bundle, and the library name
+ * must be the bundle's actual filename (kwabi_runtime_pgNN) — not a made-up
+ * "kwabi_runtime", which is what made every worker exit with
+ * 'could not access file "kwabi_runtime"'. KWABI_BUNDLE_NAME is supplied by
+ * the Makefile, so the two can never drift.
+ *
+ * The ABI's bgworker_main_type callback cannot be called directly here (it is
+ * a pointer in another process); a real extension would pass its work as
+ * bgw_main_arg. For the lifecycle test the entry just idles briefly.
  */
-static void
+void
 kwabi_bgworker_entry(Datum arg)
 {
-    /* The worker function does nothing for now — the test just proves the
-     * lifecycle (register/is_running/terminate) works. A real extension
-     * would use this to call its own background work. */
+    (void) arg;
     pg_usleep(1000000L);  /* 1 second */
 }
 
@@ -49,7 +53,23 @@ shim_bgworker_register(const char *name, bgworker_main_type main, void *arg)
 
     memset(&worker, 0, sizeof(worker));
     strncpy(worker.bgw_name, name, BGW_MAXLEN - 1);
-    strncpy(worker.bgw_library_name, "kwabi_runtime", MAXPGPATH - 1);
+    /*
+     * Bound on the FIELD's size, not a constant. `bgw_library_name` is
+     * BGW_MAXLEN (96) on PG16 but MAXPGPATH (1024) on PG17/18; a
+     * `strncpy(..., MAXPGPATH - 1)` therefore writes past the end on PG16 and
+     * _FORTIFY_SOURCE aborts the backend (SIGTRAP -> server restart), which
+     * took the whole matrix down at bgworker check 1. sizeof is correct on
+     * every major.
+     */
+#ifdef KWABI_BUNDLE_NAME
+    /* The real bundle filename, supplied by the Makefile. Using a literal
+     * "kwabi_runtime" here made every worker die with 'could not access file'. */
+    strncpy(worker.bgw_library_name, KWABI_BUNDLE_NAME,
+            sizeof(worker.bgw_library_name) - 1);
+#else
+    strncpy(worker.bgw_library_name, "kwabi_runtime",
+            sizeof(worker.bgw_library_name) - 1);
+#endif
     strncpy(worker.bgw_function_name, "kwabi_bgworker_entry", BGW_MAXLEN - 1);
     worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
     worker.bgw_start_time = BgWorkerStart_ConsistentState;
@@ -93,7 +113,24 @@ shim_bgworker_terminate(Oid bgw_oid)
 
     PG_TRY();
     {
+        /*
+         * Terminate is asynchronous: it signals the worker, which then exits
+         * on its own. The ABI's is_running must reflect "stopped" right after
+         * this returns, so wait for the shutdown rather than assuming it.
+         *
+         * WaitForBackgroundWorkerShutdown polls forever — if the worker never
+         * reaches BGWH_STOPPED (e.g. it was never started, or it is stuck),
+         * the test hangs. Use a bounded poll instead: 50 × 100ms = 5s max.
+         */
         TerminateBackgroundWorker(handle);
+        for (int i = 0; i < 50; i++)
+        {
+            pid_t pid;
+            BgwHandleStatus status = GetBackgroundWorkerPid(handle, &pid);
+            if (status == BGWH_STOPPED || status == BGWH_POSTMASTER_DIED)
+                break;
+            pg_usleep(100000L);  /* 100ms */
+        }
     }
     PG_CATCH();
     {
@@ -122,8 +159,28 @@ shim_bgworker_is_running(Oid bgw_oid)
 
     PG_TRY();
     {
-        BgwHandleStatus status = GetBackgroundWorkerPid(handle, &pid);
-        result = (status == BGWH_STARTED && pid != 0);
+        /*
+         * GetBackgroundWorkerPid returns BGWH_NOT_YET_STARTED until the worker
+         * has forked AND reached a consistent state. A single immediate poll
+         * therefore reports false for a worker that was registered a moment
+         * ago — which is exactly the "returned false after register" failure.
+         * Poll briefly rather than once. Bounded, so a worker that never starts
+         * still reports false instead of hanging.
+         */
+        for (int i = 0; i < 100; i++)
+        {
+            BgwHandleStatus status = GetBackgroundWorkerPid(handle, &pid);
+
+            if (status == BGWH_STARTED && pid != 0)
+            {
+                result = true;
+                break;
+            }
+            if (status == BGWH_STOPPED || status == BGWH_POSTMASTER_DIED)
+                break;
+
+            pg_usleep(10000L);   /* 10ms */
+        }
     }
     PG_CATCH();
     {

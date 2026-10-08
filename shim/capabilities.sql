@@ -61,10 +61,10 @@ SELECT kwabi_proof() LIKE '%genuine PostgreSQL memory%'
 \echo '=== 3. bits NOT claimed must be genuinely absent ==='
 \echo '   (a runtime returning all-ones passes section 2 and FAILS here)'
 
--- Only five bits are defined. Nothing at or above bit 5 may be set: a runtime
+-- Only six bits are defined. Nothing at or above bit 6 may be set: a runtime
 -- that sets one is claiming a capability this header does not define, and an
 -- extension cannot reason about it.
-SELECT ((kwabi_capabilities() & ~31::bigint) = 0) AS no_undefined_bits;
+SELECT ((kwabi_capabilities() & ~63::bigint) = 0) AS no_undefined_bits;
 
 -- ATOMIC_BODY is the bit most likely to be over-claimed, because it is an
 -- empirical promise rather than a structural one. It must be absent on a
@@ -75,6 +75,12 @@ SELECT ((kwabi_capabilities() & ~31::bigint) = 0) AS no_undefined_bits;
 SELECT ((kwabi_capabilities() & 16) <> 0) = (kwabi_try_write_then_fail(1)
                                              LIKE '%survivors=0%')
        AS atomic_bit_matches_reality;
+
+-- SLRU: the bit must track the load model. This script runs against a server
+-- the harness started WITHOUT preload (the ordinary $(PGPORT) cluster), so the
+-- bit must be CLEAR here even though the slots are wired. That is the whole
+-- point of the bit: a slot test cannot tell the two cases apart.
+SELECT ((kwabi_capabilities() & 32) = 0) AS slru_bit_clear_without_preload;
 
 \echo ''
 \echo '=== 4. the bootstrap rule ==='
