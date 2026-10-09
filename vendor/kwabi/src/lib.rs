@@ -402,7 +402,64 @@ pub struct KwabiV1 {
     pub capabilities: Option<unsafe extern "C" fn() -> u64>,
     pub memory_context_create:
         Option<unsafe extern "C" fn(*const c_char) -> *mut KwabiMemoryContext>,
+    // Executor hooks (kwabi.h, "Executor hooks"). A body returns a status and
+    // reports failure through the error channel; it must not unwind.
+    pub hook_register_executor_start:
+        Option<unsafe extern "C" fn(KwabiExecutorStartBodyFn, *mut std::ffi::c_void) -> i32>,
+    pub hook_register_executor_run:
+        Option<unsafe extern "C" fn(KwabiExecutorRunBodyFn, *mut std::ffi::c_void) -> i32>,
+    pub hook_register_executor_finish:
+        Option<unsafe extern "C" fn(KwabiExecutorFinishBodyFn, *mut std::ffi::c_void) -> i32>,
+    pub hook_register_executor_end:
+        Option<unsafe extern "C" fn(KwabiExecutorEndBodyFn, *mut std::ffi::c_void) -> i32>,
+    pub hook_next_executor_start: Option<
+        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, i32, *mut guarded::KwabiErrorAbi) -> i32,
+    >,
+    pub hook_next_executor_run: Option<
+        unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            i32,
+            u64,
+            *mut guarded::KwabiErrorAbi,
+        ) -> i32,
+    >,
+    pub hook_next_executor_finish: Option<
+        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut guarded::KwabiErrorAbi) -> i32,
+    >,
+    pub hook_next_executor_end: Option<
+        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut guarded::KwabiErrorAbi) -> i32,
+    >,
 }
+
+/// Executor hook body types (kwabi.h). The last argument is the caller's `arg`.
+pub type KwabiExecutorStartBodyFn = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    i32,
+    *mut std::ffi::c_void,
+    *mut guarded::KwabiErrorAbi,
+    *mut std::ffi::c_void,
+) -> i32;
+pub type KwabiExecutorRunBodyFn = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    i32,
+    u64,
+    *mut std::ffi::c_void,
+    *mut guarded::KwabiErrorAbi,
+    *mut std::ffi::c_void,
+) -> i32;
+pub type KwabiExecutorFinishBodyFn = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *mut std::ffi::c_void,
+    *mut guarded::KwabiErrorAbi,
+    *mut std::ffi::c_void,
+) -> i32;
+pub type KwabiExecutorEndBodyFn = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *mut std::ffi::c_void,
+    *mut guarded::KwabiErrorAbi,
+    *mut std::ffi::c_void,
+) -> i32;
 
 // Opaque handle types
 #[repr(C)]

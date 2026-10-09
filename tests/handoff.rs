@@ -221,9 +221,10 @@ fn table_layout_is_stable() {
     // execute slots (pre-release). A slot in the middle moves every offset after it.
     // 208 -> 206 when the reorder buffer slots were removed and
     // logical_decoding_confirm added (pre-release).
+    // 206 -> 214 when the executor hook slots were appended (4 register, 4 next).
     assert_eq!(
         KwabiV1::FIELD_COUNT,
-        206,
+        214,
         "field count changed — kwabi.h edited?"
     );
 }
