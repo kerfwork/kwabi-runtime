@@ -1257,7 +1257,7 @@ for M in "${MAJORS[@]}"; do
     LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" \
         "$PGB/initdb" -D "$LOGICAL_DATA" -U "$(whoami)" \
         --encoding=UTF8 --locale=C >/dev/null 2>&1
-    printf "wal_level = logical\nmax_replication_slots = 4\nport = %s\nlisten_addresses = 'localhost'\nunix_socket_directories = '%s'\n" \
+    printf "wal_level = logical\nmax_replication_slots = 4\nmax_prepared_transactions = 4\nport = %s\nlisten_addresses = 'localhost'\nunix_socket_directories = '%s'\n" \
         "$LOGICAL_PORT" "$PSOCK" > "$LOGICAL_DATA/postgresql.auto.conf"
 
     OUT=/tmp/kwabi_logical_$M.log
@@ -1283,13 +1283,17 @@ for M in "${MAJORS[@]}"; do
         LOG_MISSING=$(grep -A2 'logical_missing_slot' "$OUT" | grep -cE '^ t')
         LOG_PGO=$(grep -A2 'pgoutput_messages' "$OUT" | grep -cE '^ t')
         LOG_PGO_NOOPT=$(grep -A2 'pgoutput_no_options' "$OUT" | grep -cE '^ t')
+        LOG_2PC_PREP=$(grep -A2 'twophase_prepared' "$OUT" | grep -cE '^ t')
+        LOG_2PC_COMMIT=$(grep -A2 'twophase_commit' "$OUT" | grep -cE '^ t')
+        LOG_2PC_ROLLBACK=$(grep -A2 'twophase_rollback' "$OUT" | grep -cE '^ t')
 
         if [ "$LOG_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && \
            [ "$LOG_READ" -ge 1 ] && [ "$LOG_AFTER" -ge 1 ] && [ "$LOG_MISSING" -ge 1 ] && \
-           [ "$LOG_PGO" -ge 1 ] && [ "$LOG_PGO_NOOPT" -ge 1 ]; then
+           [ "$LOG_PGO" -ge 1 ] && [ "$LOG_PGO_NOOPT" -ge 1 ] && \
+           [ "$LOG_2PC_PREP" -ge 1 ] && [ "$LOG_2PC_COMMIT" -ge 1 ] && [ "$LOG_2PC_ROLLBACK" -ge 1 ]; then
             record PASS "$M" "logical-api green ($LOG_TRUE assertions)"
         else
-            record FAIL "$M" "logical-api: true=$LOG_TRUE false=$LOG_FALSE errors=$(unexpected_errors "$OUT") read=$LOG_READ after=$LOG_AFTER missing=$LOG_MISSING pgoutput=$LOG_PGO noopt=$LOG_PGO_NOOPT"
+            record FAIL "$M" "logical-api: true=$LOG_TRUE false=$LOG_FALSE errors=$(unexpected_errors "$OUT") read=$LOG_READ after=$LOG_AFTER missing=$LOG_MISSING pgoutput=$LOG_PGO noopt=$LOG_PGO_NOOPT 2pc=$LOG_2PC_PREP/$LOG_2PC_COMMIT/$LOG_2PC_ROLLBACK"
             echo "      see $OUT"
         fi
 

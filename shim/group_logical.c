@@ -498,3 +498,102 @@ kwabi_pgoutput_no_options_test(PG_FUNCTION_ARGS)
     PG_END_TRY();
     PG_RETURN_BOOL(ok);
 }
+
+/*
+ * Two-phase commit through pgoutput. The SQL fixture prepares and commits or
+ * rolls back transactions, because PREPARE TRANSACTION cannot run inside a
+ * function. These tests only read what the fixture left in the slot, in order:
+ *
+ *   kwabi_2pc_prepared_test  after PREPARE: data is delivered (I, P), no commit (C, K)
+ *   kwabi_2pc_commit_test    after COMMIT PREPARED: K arrives; the read is confirmed
+ *   kwabi_2pc_rollback_test  after ROLLBACK PREPARED: r arrives, and no K
+ */
+#define KWABI_2PC_SLOT "kwabi_2pc_t"
+
+static void
+kwabi_2pc_tags(KwabiLogicalDecodingCtx ctx, int *begin_prepare, int *inserts,
+               int *prepares, int *commits, int *commit_prepared, int *rollback_prepared,
+               int64 *last_lsn)
+{
+    int64       lsn;
+    int32       xid, len;
+    const char *data;
+
+    while (shim_api->logical_decoding_read(ctx, &lsn, &xid, &data, &len)) {
+        if (len < 1)
+            continue;
+        switch (data[0]) {
+            case 'b': (*begin_prepare)++; break;
+            case 'I': (*inserts)++; break;
+            case 'P': (*prepares)++; break;
+            case 'C': (*commits)++; break;
+            case 'K': (*commit_prepared)++; break;
+            case 'r': (*rollback_prepared)++; break;
+            default: break;
+        }
+        *last_lsn = lsn;
+    }
+}
+
+static const char *kwabi_2pc_names[] = { "proto_version", "two_phase", "publication_names" };
+static const char *kwabi_2pc_values[] = { "3", "on", "kwabi_pub" };
+
+PG_FUNCTION_INFO_V1(kwabi_2pc_prepared_test);
+
+Datum
+kwabi_2pc_prepared_test(PG_FUNCTION_ARGS)
+{
+    KwabiLogicalDecodingCtx ctx;
+    int begin_prepare = 0, inserts = 0, prepares = 0, commits = 0, commit_prepared = 0, rollback_prepared = 0;
+    int64 last_lsn = 0;
+    bool  ok;
+
+    ctx = shim_api->logical_decoding_begin(KWABI_2PC_SLOT, 0, kwabi_2pc_names, kwabi_2pc_values, 3);
+    kwabi_2pc_tags(ctx, &begin_prepare, &inserts, &prepares, &commits, &commit_prepared, &rollback_prepared, &last_lsn);
+    shim_api->logical_decoding_end(ctx);
+
+    /* The prepared transaction's data is out before it is final. */
+    ok = (begin_prepare == 1 && inserts == 1 && prepares == 1 &&
+          commits == 0 && commit_prepared == 0 && rollback_prepared == 0);
+    PG_RETURN_BOOL(ok);
+}
+
+PG_FUNCTION_INFO_V1(kwabi_2pc_commit_test);
+
+Datum
+kwabi_2pc_commit_test(PG_FUNCTION_ARGS)
+{
+    KwabiLogicalDecodingCtx ctx;
+    int begin_prepare = 0, inserts = 0, prepares = 0, commits = 0, commit_prepared = 0, rollback_prepared = 0;
+    int64 last_lsn = 0;
+    bool  ok;
+
+    ctx = shim_api->logical_decoding_begin(KWABI_2PC_SLOT, 0, kwabi_2pc_names, kwabi_2pc_values, 3);
+    kwabi_2pc_tags(ctx, &begin_prepare, &inserts, &prepares, &commits, &commit_prepared, &rollback_prepared, &last_lsn);
+
+    /* Commit is the outcome: K, and never a plain C for a prepared transaction. */
+    ok = (commit_prepared == 1 && commits == 0 && rollback_prepared == 0 && last_lsn != 0);
+    if (ok)
+        shim_api->logical_decoding_confirm(ctx, last_lsn);
+    shim_api->logical_decoding_end(ctx);
+    PG_RETURN_BOOL(ok);
+}
+
+PG_FUNCTION_INFO_V1(kwabi_2pc_rollback_test);
+
+Datum
+kwabi_2pc_rollback_test(PG_FUNCTION_ARGS)
+{
+    KwabiLogicalDecodingCtx ctx;
+    int begin_prepare = 0, inserts = 0, prepares = 0, commits = 0, commit_prepared = 0, rollback_prepared = 0;
+    int64 last_lsn = 0;
+    bool  ok;
+
+    ctx = shim_api->logical_decoding_begin(KWABI_2PC_SLOT, 0, kwabi_2pc_names, kwabi_2pc_values, 3);
+    kwabi_2pc_tags(ctx, &begin_prepare, &inserts, &prepares, &commits, &commit_prepared, &rollback_prepared, &last_lsn);
+    shim_api->logical_decoding_end(ctx);
+
+    /* The read starts after the commit test's confirm, so only the rollback is new. */
+    ok = (rollback_prepared == 1 && commit_prepared == 0 && commits == 0);
+    PG_RETURN_BOOL(ok);
+}
