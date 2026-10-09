@@ -413,7 +413,12 @@ pub struct KwabiV1 {
     pub hook_register_executor_end:
         Option<unsafe extern "C" fn(KwabiExecutorEndBodyFn, *mut std::ffi::c_void) -> i32>,
     pub hook_next_executor_start: Option<
-        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, i32, *mut guarded::KwabiErrorAbi) -> i32,
+        unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            i32,
+            *mut guarded::KwabiErrorAbi,
+        ) -> i32,
     >,
     pub hook_next_executor_run: Option<
         unsafe extern "C" fn(
@@ -425,10 +430,18 @@ pub struct KwabiV1 {
         ) -> i32,
     >,
     pub hook_next_executor_finish: Option<
-        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut guarded::KwabiErrorAbi) -> i32,
+        unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut guarded::KwabiErrorAbi,
+        ) -> i32,
     >,
     pub hook_next_executor_end: Option<
-        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut guarded::KwabiErrorAbi) -> i32,
+        unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut guarded::KwabiErrorAbi,
+        ) -> i32,
     >,
 }
 
