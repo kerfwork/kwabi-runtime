@@ -82,7 +82,7 @@ check "rebind name to v2" "bound" "$(A "SELECT kwabi_hook_test_bind('kwt_ext', '
 BV "SELECT count(*) FROM generate_series(1,1) /* kwt_reload */;"
 check "session B switches to v2 without restart" "reload body 2 refused" "$(printf '%s\n' "$LASTOUT" | grep -o 'reload body [0-9]* refused' | head -1)"
 
-check "bind records a missing path without failing" "bound" "$(A "SELECT kwabi_hook_test_bind('kwt_ext', '$SCRATCH/missing.dylib')")"
+check "bind refuses a missing path" "bind refused" "$(A "SELECT kwabi_hook_test_bind('kwt_ext', '$SCRATCH/missing.dylib')")"
 BV "SELECT count(*) FROM generate_series(1,1) /* kwt_reload */;"
 check "bad path keeps the last good body" "reload body 2 refused" "$(printf '%s\n' "$LASTOUT" | grep -o 'reload body [0-9]* refused' | head -1)"
 

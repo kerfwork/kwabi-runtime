@@ -1109,6 +1109,25 @@ for M in "${MAJORS[@]}"; do
         grep -E "FAIL" "$OUT" | head -5 | sed 's/^/      /'
     fi
 
+    # --- type-canary: uint64 text I/O as a reloadable body --------------------
+    #
+    # A SQL type whose input and output are a bound library's bodies (name-binding).
+    # The stage runs its own preloaded cluster and checks round-trip, errors with
+    # controls, a reload to a new body, and a refused bind.
+    echo "  [type-canary] uint64 text I/O as a reloadable body"
+    OUT=/tmp/kwabi_typecanary_$M.log
+    TC_SCRATCH="${TMPDIR:-/tmp}/kwabi-typecanary-pg$M"
+    mkdir -p "$TC_SCRATCH"
+    if PGBIN="$PGB" DLSUFFIX="$DLSUFFIX" SCRATCH="$TC_SCRATCH" CANARY_PORT=$((5510 + M % 100)) \
+        ./type-canary-run.sh "$M" >"$OUT" 2>&1 \
+       && grep -q "uint64 canary passed" "$OUT"; then
+        TC_PASS=$(grep -c "  PASS " "$OUT")
+        record PASS "$M" "type-canary green ($TC_PASS checks)"
+    else
+        record FAIL "$M" "type-canary: see $OUT"
+        grep -E "FAIL" "$OUT" | head -5 | sed 's/^/      /'
+    fi
+
     # --- executor-api: executor slots through the ABI ----------------------
     #
     # The executor group: start, run, getnext, finish, end. The assertion that

@@ -535,15 +535,23 @@ clear_named_position(int i)
     }
 }
 
-/* Load the library for one name into its positions. A failure leaves the previous
- * bodies in place, and the failure is reported as a warning. */
+/* Type bodies, one per name position, valid when input is set. */
+static KwabiTypeBodies named_types[KWABI_HOOK_NAMED_MAX];
+
+/*
+ * Load the library for one name into its positions. A library may supply hook bodies,
+ * type bodies, or both; it must supply one of them. A failure leaves the previous
+ * bodies in place, and the failure is reported as a warning.
+ */
 static void
 load_named(int i, const char *path)
 {
     void       *h;
-    KwabiHookBodies *(*getter) (void);
+    KwabiHookBodies *(*hook_getter) (void);
+    KwabiTypeBodies *(*type_getter) (void);
     bool        (*ext_init) (const KwabiV1 *);
-    const KwabiHookBodies *t;
+    const KwabiHookBodies *t = NULL;
+    const KwabiTypeBodies *tt = NULL;
 
     h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (h == NULL)
@@ -551,42 +559,60 @@ load_named(int i, const char *path)
         ereport(WARNING, (errmsg("kwabi hook bind: %s", dlerror())));
         return;
     }
-    getter = (KwabiHookBodies *(*) (void)) dlsym(h, KWABI_HOOK_BODIES_SYMBOL);
-    if (getter == NULL)
+    hook_getter = (KwabiHookBodies *(*) (void)) dlsym(h, KWABI_HOOK_BODIES_SYMBOL);
+    type_getter = (KwabiTypeBodies *(*) (void)) dlsym(h, KWABI_TYPE_BODIES_SYMBOL);
+    if (hook_getter == NULL && type_getter == NULL)
     {
-        ereport(WARNING, (errmsg("kwabi hook bind: %s exports no %s",
-                                 path, KWABI_HOOK_BODIES_SYMBOL)));
+        ereport(WARNING, (errmsg("kwabi bind: %s exports neither %s nor %s",
+                                 path, KWABI_HOOK_BODIES_SYMBOL, KWABI_TYPE_BODIES_SYMBOL)));
         return;
     }
-    t = getter();
-    if (t == NULL || t->size != sizeof(KwabiHookBodies) ||
-        t->version != KWABI_HOOK_BODIES_VERSION)
+    if (hook_getter != NULL)
     {
-        ereport(WARNING, (errmsg("kwabi hook bind: %s has an incompatible body table", path)));
-        return;
+        t = hook_getter();
+        if (t == NULL || t->size != sizeof(KwabiHookBodies) ||
+            t->version != KWABI_HOOK_BODIES_VERSION)
+        {
+            ereport(WARNING, (errmsg("kwabi hook bind: %s has an incompatible body table", path)));
+            return;
+        }
+    }
+    if (type_getter != NULL)
+    {
+        tt = (const KwabiTypeBodies *) type_getter();
+        if (tt == NULL || tt->size != sizeof(KwabiTypeBodies) ||
+            tt->version != KWABI_TYPE_BODIES_VERSION)
+        {
+            ereport(WARNING, (errmsg("kwabi bind: %s has an incompatible type table", path)));
+            return;
+        }
     }
     ext_init = (bool (*) (const KwabiV1 *)) dlsym(h, "kwabi_ext_init");
     if (ext_init != NULL && !ext_init(shim_api))
     {
-        ereport(WARNING, (errmsg("kwabi hook bind: %s kwabi_ext_init failed", path)));
+        ereport(WARNING, (errmsg("kwabi bind: %s kwabi_ext_init failed", path)));
         return;
     }
 
     clear_named_position(i);
     named_handle[i] = h;
-    bodies[HOOK_START][i].fn = (void *) t->start;
-    bodies[HOOK_RUN][i].fn = (void *) t->run;
-    bodies[HOOK_FINISH][i].fn = (void *) t->finish;
-    bodies[HOOK_END][i].fn = (void *) t->end;
-    bodies[HOOK_CHECK_PERMS][i].fn = (void *) t->check_perms;
-    bodies[HOOK_PLANNER][i].fn = (void *) t->planner;
-    bodies[HOOK_UTILITY][i].fn = (void *) t->utility;
-    for (int p = 0; p < HOOK_NPOINTS; p++)
+    if (t != NULL)
     {
-        bodies[p][i].arg = t->arg;
-        if (bodies[p][i].fn != NULL)
-            install_point((HookPoint) p);
+        bodies[HOOK_START][i].fn = (void *) t->start;
+        bodies[HOOK_RUN][i].fn = (void *) t->run;
+        bodies[HOOK_FINISH][i].fn = (void *) t->finish;
+        bodies[HOOK_END][i].fn = (void *) t->end;
+        bodies[HOOK_CHECK_PERMS][i].fn = (void *) t->check_perms;
+        bodies[HOOK_PLANNER][i].fn = (void *) t->planner;
+        bodies[HOOK_UTILITY][i].fn = (void *) t->utility;
+        for (int p = 0; p < HOOK_NPOINTS; p++)
+        {
+            bodies[p][i].arg = t->arg;
+            if (bodies[p][i].fn != NULL)
+                install_point((HookPoint) p);
+        }
     }
+    named_types[i] = (tt != NULL) ? *tt : (KwabiTypeBodies) {0};
 }
 
 /* Bring this backend up to date with the name table. Called on every hook entry. */
@@ -621,6 +647,34 @@ sync_named(void)
     }
 }
 
+/*
+ * Check that a library can be loaded and has a table this runtime understands, before
+ * it is published. A published path that fails would leave every backend that starts
+ * later without a body, so the bind refuses it here instead.
+ */
+static bool
+probe_library(const char *path)
+{
+    void       *h;
+    void       *hook_getter;
+    void       *type_getter;
+
+    h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (h == NULL)
+    {
+        ereport(WARNING, (errmsg("kwabi bind refused: %s", dlerror())));
+        return false;
+    }
+    hook_getter = dlsym(h, KWABI_HOOK_BODIES_SYMBOL);
+    type_getter = dlsym(h, KWABI_TYPE_BODIES_SYMBOL);
+    if (hook_getter == NULL && type_getter == NULL)
+    {
+        ereport(WARNING, (errmsg("kwabi bind refused: %s exports neither body table", path)));
+        return false;
+    }
+    return true;
+}
+
 static KwabiStatus
 shim_hook_bind_extension(const char *name, const char *path)
 {
@@ -629,6 +683,8 @@ shim_hook_bind_extension(const char *name, const char *path)
     if (named_shm == NULL || name == NULL || path == NULL ||
         name[0] == '\0' || strlen(name) >= KWABI_HOOK_NAME_MAX ||
         strlen(path) >= MAXPGPATH)
+        return KWABI_ERR_BAD_ARG;
+    if (!probe_library(path))
         return KWABI_ERR_BAD_ARG;
 
     SpinLockAcquire(&named_shm->mutex);
@@ -1282,4 +1338,41 @@ kwabi_hook_test_bind(PG_FUNCTION_ARGS)
     KwabiStatus st = shim_api->hook_bind_extension(text_to_cstring(PG_GETARG_TEXT_PP(0)),
                                                    text_to_cstring(PG_GETARG_TEXT_PP(1)));
     PG_RETURN_TEXT_P(cstring_to_text(st == KWABI_OK ? "bound" : "bind refused"));
+}
+
+/*
+ * Type I/O lookup for the SQL functions in group_type_io.c. Returns false when the name
+ * is not bound, or is bound to a library with no type table.
+ */
+bool
+shim_type_bodies_lookup(const char *name, KwabiTypeBodies *out)
+{
+    bool        found = false;
+
+    sync_named();
+    if (named_shm == NULL)
+        return false;
+
+    SpinLockAcquire(&named_shm->mutex);
+    for (int i = 0; i < named_shm->nentries; i++)
+    {
+        if (strcmp(named_shm->e[i].name, name) == 0)
+        {
+            if (named_types[i].input != NULL)
+            {
+                *out = named_types[i];
+                found = true;
+            }
+            break;
+        }
+    }
+    SpinLockRelease(&named_shm->mutex);
+    return found;
+}
+
+/* Raise a KwabiError from a SQL function. */
+void
+shim_raise_kwabi_error(const KwabiError *err)
+{
+    raise_from_error(err);
 }

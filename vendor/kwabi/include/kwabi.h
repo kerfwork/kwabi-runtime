@@ -1180,6 +1180,43 @@ typedef struct KwabiV1 {
 bool kwabi_ext_init(const KwabiV1 *api);
 
 /* ========================================================================
+ * Reloadable type bodies (appended, still v1)
+ *
+ * A library bound with hook_bind_extension(name, path) may also export
+ *
+ *     const KwabiTypeBodies *kwabi_type_bodies(void);
+ *
+ * which supplies the text I/O of a type named `name`. The SQL functions that PostgreSQL
+ * calls are the runtime's: create them as <name>_in(cstring) and <name>_out(<type>),
+ * both LANGUAGE C from the runtime bundle. The runtime looks the body up by the
+ * name's binding, so the binding is what a reload replaces. A value is a 64-bit
+ * unsigned integer carried by value (INTERNALLENGTH = 8, PASSEDBYVALUE).
+ *
+ * input: parse `text`, store the value, return KWABI_OK; on failure fill `err` with an
+ * SQLSTATE (for example 22P02 for bad syntax, 22003 for out of range) and return
+ * KWABI_ERR_BODY_RAISED.
+ * output: write the text of `value` into `buf` (NUL-terminated, buflen bytes) and
+ * return KWABI_OK; a buffer that is too small is KWABI_ERR_BAD_ARG.
+ * ======================================================================== */
+
+#define KWABI_TYPE_BODIES_SYMBOL "kwabi_type_bodies"
+#define KWABI_TYPE_BODIES_VERSION 1
+
+typedef KwabiStatus (*KwabiTypeInputFn)(const char *text, uint64_t *value,
+                                        KwabiError *err, void *arg);
+typedef KwabiStatus (*KwabiTypeOutputFn)(uint64_t value, char *buf, size_t buflen,
+                                         KwabiError *err, void *arg);
+
+typedef struct KwabiTypeBodies
+{
+    uint32_t    size;              /* sizeof(KwabiTypeBodies) as the library compiled it */
+    uint32_t    version;           /* KWABI_TYPE_BODIES_VERSION */
+    KwabiTypeInputFn input;
+    KwabiTypeOutputFn output;
+    void       *arg;
+} KwabiTypeBodies;
+
+/* ========================================================================
  * Reloadable hook bodies (appended, still v1)
  *
  * An extension that wants its hook bodies reloadable exports
