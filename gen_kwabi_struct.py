@@ -65,6 +65,10 @@ SCALARS = {
 VERBATIM = {
     "KwabiError": "KwabiError",
     "KwabiBodyFn": "KwabiBodyFn",
+    "KwabiExecutorStartBody": "KwabiExecutorStartBody",
+    "KwabiExecutorRunBody": "KwabiExecutorRunBody",
+    "KwabiExecutorFinishBody": "KwabiExecutorFinishBody",
+    "KwabiExecutorEndBody": "KwabiExecutorEndBody",
 }
 
 # Opaque handle typedefs -> the Rust pointee they actually are.
@@ -101,6 +105,13 @@ HANDLES = {
     "Node": "c_void",
     "Plan": "c_void",
     "KwabiQueryDesc": "c_void",
+    "QueryDesc": "c_void",
+    "ParamListInfo": "c_void",
+    "Snapshot": "c_void",
+    "IntoClause": "c_void",
+    "ExplainState": "c_void",
+    "QueryEnvironment": "c_void",
+    "KwabiHookNext": "c_void",
     "KwabiIntoClause": "c_void",
     "KwabiExplainState": "c_void",
     "KwabiParamListInfo": "c_void",
@@ -300,12 +311,14 @@ def emit(fields):
     L.append("pub const KWABI_CAP_MEMORY_INTROSPECTION: u64 = 1 << 3;")
     L.append("pub const KWABI_CAP_ATOMIC_BODY: u64 = 1 << 4;")
     L.append("pub const KWABI_CAP_SLRU: u64 = 1 << 5;")
+    L.append("pub const KWABI_CAP_HOOKS: u64 = 1 << 6;")
     L.append("pub const KWABI_CAP_ALL: u64 = KWABI_CAP_CORE")
     L.append("    | KWABI_CAP_STRUCTURED_ERRORS")
     L.append("    | KWABI_CAP_ERROR_FIREWALL")
     L.append("    | KWABI_CAP_MEMORY_INTROSPECTION")
     L.append("    | KWABI_CAP_ATOMIC_BODY")
-    L.append("    | KWABI_CAP_SLRU;")
+    L.append("    | KWABI_CAP_SLRU")
+    L.append("    | KWABI_CAP_HOOKS;")
     L.append("")
     L.append("/// Stable ABI version published by this runtime.")
     L.append("pub const KWABI_VERSION: u32 = 1;")
@@ -398,6 +411,18 @@ def emit(fields):
     L.append("/// to reach the channel at all.")
     L.append("pub type KwabiBodyFn =")
     L.append("    unsafe extern \"C\" fn(*mut c_void, *mut KwabiError) -> c_int;")
+    L.append("")
+    # Executor hook bodies. Each returns a KwabiStatus (c_int) and takes the
+    # `next` handle and error channel after its PostgreSQL arguments.
+    L.append("/// Executor hook bodies. Must not raise or unwind; see kwabi.h.")
+    L.append("pub type KwabiExecutorStartBody =")
+    L.append("    unsafe extern \"C\" fn(*mut c_void, c_int, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
+    L.append("pub type KwabiExecutorRunBody =")
+    L.append("    unsafe extern \"C\" fn(*mut c_void, c_int, u64, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
+    L.append("pub type KwabiExecutorFinishBody =")
+    L.append("    unsafe extern \"C\" fn(*mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
+    L.append("pub type KwabiExecutorEndBody =")
+    L.append("    unsafe extern \"C\" fn(*mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
     L.append("")
     L.append("#[repr(C)]")
     L.append("pub struct KwabiV1 {")

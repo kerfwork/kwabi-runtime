@@ -284,6 +284,7 @@ _PG_init(void)
     init_group_explain();
     init_group_transaction();
     init_group_executor();
+    init_group_hook();
     init_group_bgworker();
     init_group_slru();
 
@@ -451,6 +452,12 @@ shim_capabilities(void)
      */
     if (shim_slru_is_available())
         caps |= KWABI_CAP_SLRU;
+
+    /*
+     * HOOKS is the shim's guarantee about chaining (group_hook.c), not a slot test:
+     * every link runs in registration order and reports its error to the statement.
+     */
+    caps |= KWABI_CAP_HOOKS;
 
     return caps;
 }

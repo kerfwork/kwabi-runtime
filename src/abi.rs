@@ -20,12 +20,14 @@ pub const KWABI_CAP_ERROR_FIREWALL: u64 = 1 << 2;
 pub const KWABI_CAP_MEMORY_INTROSPECTION: u64 = 1 << 3;
 pub const KWABI_CAP_ATOMIC_BODY: u64 = 1 << 4;
 pub const KWABI_CAP_SLRU: u64 = 1 << 5;
+pub const KWABI_CAP_HOOKS: u64 = 1 << 6;
 pub const KWABI_CAP_ALL: u64 = KWABI_CAP_CORE
     | KWABI_CAP_STRUCTURED_ERRORS
     | KWABI_CAP_ERROR_FIREWALL
     | KWABI_CAP_MEMORY_INTROSPECTION
     | KWABI_CAP_ATOMIC_BODY
-    | KWABI_CAP_SLRU;
+    | KWABI_CAP_SLRU
+    | KWABI_CAP_HOOKS;
 
 /// Stable ABI version published by this runtime.
 pub const KWABI_VERSION: u32 = 1;
@@ -118,6 +120,22 @@ impl Default for KwabiError {
 /// first prototype, where `(void *arg)` alone left the body with no way
 /// to reach the channel at all.
 pub type KwabiBodyFn = unsafe extern "C" fn(*mut c_void, *mut KwabiError) -> c_int;
+
+/// Executor hook bodies. Must not raise or unwind; see kwabi.h.
+pub type KwabiExecutorStartBody =
+    unsafe extern "C" fn(*mut c_void, c_int, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;
+pub type KwabiExecutorRunBody = unsafe extern "C" fn(
+    *mut c_void,
+    c_int,
+    u64,
+    *mut c_void,
+    *mut KwabiError,
+    *mut c_void,
+) -> c_int;
+pub type KwabiExecutorFinishBody =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;
+pub type KwabiExecutorEndBody =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;
 
 #[repr(C)]
 pub struct KwabiV1 {
@@ -354,11 +372,28 @@ pub struct KwabiV1 {
     pub error_get: Option<unsafe extern "C" fn(*mut KwabiError) -> ()>,
     pub capabilities: Option<unsafe extern "C" fn() -> u64>,
     pub memory_context_create: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
+    pub hook_register_executor_start:
+        Option<unsafe extern "C" fn(KwabiExecutorStartBody, *mut c_void) -> c_int>,
+    pub hook_register_executor_run:
+        Option<unsafe extern "C" fn(KwabiExecutorRunBody, *mut c_void) -> c_int>,
+    pub hook_register_executor_finish:
+        Option<unsafe extern "C" fn(KwabiExecutorFinishBody, *mut c_void) -> c_int>,
+    pub hook_register_executor_end:
+        Option<unsafe extern "C" fn(KwabiExecutorEndBody, *mut c_void) -> c_int>,
+    pub hook_next_executor_start:
+        Option<unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, *mut KwabiError) -> c_int>,
+    pub hook_next_executor_run: Option<
+        unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, u64, *mut KwabiError) -> c_int,
+    >,
+    pub hook_next_executor_finish:
+        Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut KwabiError) -> c_int>,
+    pub hook_next_executor_end:
+        Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut KwabiError) -> c_int>,
 }
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 201;
+    pub const FIELD_COUNT: usize = 209;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -569,6 +604,14 @@ impl Default for KwabiV1 {
             error_get: None,
             capabilities: None,
             memory_context_create: None,
+            hook_register_executor_start: None,
+            hook_register_executor_run: None,
+            hook_register_executor_finish: None,
+            hook_register_executor_end: None,
+            hook_next_executor_start: None,
+            hook_next_executor_run: None,
+            hook_next_executor_finish: None,
+            hook_next_executor_end: None,
         }
     }
 }

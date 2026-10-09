@@ -153,6 +153,7 @@ extern void init_group_extension(void);
 extern void init_group_explain(void);
 extern void init_group_transaction(void);
 extern void init_group_executor(void);
+extern void init_group_hook(void);
 extern void init_group_bgworker(void);
 extern void init_group_slru(void);
 

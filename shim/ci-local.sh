@@ -1045,6 +1045,26 @@ for M in "${MAJORS[@]}"; do
         echo "      see $OUT"
     fi
 
+    # --- hook-api: the executor hook chain through the ABI -----------------
+    #
+    # Hooks are per backend and cannot be removed, so hook-api.sql runs in its own
+    # session and installs its bodies once. Each check prints "check <name>: t|f".
+    echo "  [hook-api] executor hook chain against :$PORT"
+    OUT=/tmp/kwabi_hook_$M.log
+    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+        -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+        -f hook-api.sql postgres >"$OUT" 2>&1
+
+    HOOK_TRUE=$(grep -cE 'check .*: t$' "$OUT")
+    HOOK_FALSE=$(grep -cE 'check .*: f$' "$OUT")
+
+    if [ "$HOOK_FALSE" -eq 0 ] && [ "$HOOK_TRUE" -ge 7 ]; then
+        record PASS "$M" "hook-api green ($HOOK_TRUE checks)"
+    else
+        record FAIL "$M" "hook-api: true=$HOOK_TRUE false=$HOOK_FALSE"
+        echo "      see $OUT"
+    fi
+
     # --- executor-api: executor slots through the ABI ----------------------
     #
     # The executor group: start, run, getnext, finish, end. The assertion that

@@ -100,10 +100,19 @@ extern "C" {
  * AND at least one SLRU was declared and initialised. See group_slru.c. */
 #define KWABI_CAP_SLRU                     (1ULL << 5)
 
+/* HOOKS: the executor hook slots chain. Bodies registered on a point run in
+ * registration order; each one that calls `next` reaches the rest of the chain
+ * and then the standard function; and an error from any link reaches the
+ * statement with its SQLSTATE and message. Not derivable from slot presence: a
+ * runtime could expose the hook slots as single overrides that replace one
+ * another, which would be wired and still wrong. */
+#define KWABI_CAP_HOOKS                    (1ULL << 6)
+
 /* Every defined bit, for a runtime that supports the lot. */
 #define KWABI_CAP_ALL \
     (KWABI_CAP_CORE | KWABI_CAP_STRUCTURED_ERRORS | KWABI_CAP_ERROR_FIREWALL | \
-     KWABI_CAP_MEMORY_INTROSPECTION | KWABI_CAP_ATOMIC_BODY | KWABI_CAP_SLRU)
+     KWABI_CAP_MEMORY_INTROSPECTION | KWABI_CAP_ATOMIC_BODY | KWABI_CAP_SLRU | \
+     KWABI_CAP_HOOKS)
 #define KWABI_VERSION KWABI_VERSION_1
 
 /* PostgreSQL version numbers (from pg_config.h) */
@@ -552,6 +561,40 @@ kwabi_error_set_object(KwabiError *err,
  * New functions are appended in future versions. Never reorder or remove.
  * ======================================================================== */
 
+/* ========================================================================
+ * Executor hooks (appended, still v1)
+ *
+ * A hook body is a C function that reports failure through its return value and
+ * `err`, and never raises or unwinds. The runtime calls it from a trampoline that
+ * PostgreSQL invokes as the executor hook. See notes/hook-registry-design.md.
+ *
+ * Return values:
+ *   KWABI_OK              the body succeeded;
+ *   KWABI_ERR_BODY_RAISED the body failed; it filled `err`;
+ *   KWABI_ERR_RAISED      a call through `next` raised; `err` holds the error.
+ *
+ * `next` runs the rest of the chain: the bodies registered after this one, then
+ * the standard executor function. A body may call it zero or one times. `arg` is
+ * the value given to the register slot.
+ *
+ * The execute_once argument of ExecutorRun_hook (PostgreSQL 16 and 17 only) is not
+ * exposed. The runtime forwards the value it received, so an extension sees one
+ * signature on every major.
+ * ======================================================================== */
+
+typedef void *KwabiHookNext;
+
+typedef KwabiStatus (*KwabiExecutorStartBody)(KwabiQueryDesc queryDesc, int eflags,
+                                              KwabiHookNext next, KwabiError *err,
+                                              void *arg);
+typedef KwabiStatus (*KwabiExecutorRunBody)(KwabiQueryDesc queryDesc, int direction,
+                                            uint64_t count, KwabiHookNext next,
+                                            KwabiError *err, void *arg);
+typedef KwabiStatus (*KwabiExecutorFinishBody)(KwabiQueryDesc queryDesc, KwabiHookNext next,
+                                               KwabiError *err, void *arg);
+typedef KwabiStatus (*KwabiExecutorEndBody)(KwabiQueryDesc queryDesc, KwabiHookNext next,
+                                            KwabiError *err, void *arg);
+
 typedef struct KwabiV1 {
     uint32_t version;  /* KWABI_VERSION_1 */
 
@@ -964,6 +1007,31 @@ typedef struct KwabiV1 {
      * therefore installed by the shim, not by the runtime.
      */
     KwabiMemoryContext (*memory_context_create)(const char *name);
+
+    /* ---- Executor hooks: registration (appended, still v1) ----
+     *
+     * Register a body on a point. Bodies run in registration order, and the first
+     * one registered is outermost. Returns KWABI_OK, or KWABI_ERR_BAD_ARG for a NULL
+     * body. Registration lasts for the life of the backend: there is no unregister.
+     */
+    KwabiStatus (*hook_register_executor_start)(KwabiExecutorStartBody body, void *arg);
+    KwabiStatus (*hook_register_executor_run)(KwabiExecutorRunBody body, void *arg);
+    KwabiStatus (*hook_register_executor_finish)(KwabiExecutorFinishBody body, void *arg);
+    KwabiStatus (*hook_register_executor_end)(KwabiExecutorEndBody body, void *arg);
+
+    /* ---- Executor hooks: run the rest of the chain (appended, still v1) ----
+     *
+     * Called from inside a body with the `next` it was given. A PostgreSQL error
+     * raised by the standard function returns KWABI_ERR_RAISED with `err` filled.
+     */
+    KwabiStatus (*hook_next_executor_start)(KwabiHookNext next, KwabiQueryDesc queryDesc,
+                                            int eflags, KwabiError *err);
+    KwabiStatus (*hook_next_executor_run)(KwabiHookNext next, KwabiQueryDesc queryDesc,
+                                          int direction, uint64_t count, KwabiError *err);
+    KwabiStatus (*hook_next_executor_finish)(KwabiHookNext next, KwabiQueryDesc queryDesc,
+                                             KwabiError *err);
+    KwabiStatus (*hook_next_executor_end)(KwabiHookNext next, KwabiQueryDesc queryDesc,
+                                          KwabiError *err);
 
 } KwabiV1;
 
