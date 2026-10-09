@@ -172,7 +172,7 @@ pub struct KwabiV1 {
     pub sequence_nextval: Option<unsafe extern "C" fn(u32) -> i64>,
     pub sequence_currval: Option<unsafe extern "C" fn(u32) -> i64>,
     pub sequence_setval: Option<unsafe extern "C" fn(u32, i64) -> i64>,
-    pub logical_decoding_begin: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
+    pub logical_decoding_begin: Option<unsafe extern "C" fn(*const c_char, i32) -> *mut c_void>,
     pub logical_decoding_read:
         Option<unsafe extern "C" fn(*mut c_void, *mut i64, *mut i32, *mut *const c_char) -> bool>,
     pub logical_decoding_confirm: Option<unsafe extern "C" fn(*mut c_void, i64) -> ()>,

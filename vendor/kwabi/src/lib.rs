@@ -133,7 +133,7 @@ pub struct KwabiV1 {
     pub sequence_currval: Option<extern "C" fn(u32) -> i64>,
     pub sequence_setval: Option<extern "C" fn(u32, i64) -> i64>,
     pub logical_decoding_begin:
-        Option<extern "C" fn(*const c_char) -> *mut KwabiLogicalDecodingCtx>,
+        Option<extern "C" fn(*const c_char, i32) -> *mut KwabiLogicalDecodingCtx>,
     pub logical_decoding_read: Option<
         extern "C" fn(*mut KwabiLogicalDecodingCtx, *mut i64, *mut i32, *mut *const c_char) -> bool,
     >,
@@ -521,16 +521,17 @@ impl std::error::Error for KwabiError {}
 
 impl Kwabi {
     /// Open a logical decoding handle on a slot. Nothing is consumed.
+    /// `max_changes` caps the batch; 0 means no cap.
     ///
     /// Raises a PostgreSQL error if the slot does not exist or cannot be decoded.
     /// Call it where an error may be caught, such as a guarded body.
-    pub fn logical_decoding_begin(&self, slot: &str) -> LogicalDecodingCtx<'_> {
+    pub fn logical_decoding_begin(&self, slot: &str, max_changes: i32) -> LogicalDecodingCtx<'_> {
         let name = std::ffi::CString::new(slot).expect("slot name has no NUL");
         let begin = self
             .api
             .logical_decoding_begin
             .expect("logical_decoding_begin");
-        let handle = begin(name.as_ptr());
+        let handle = begin(name.as_ptr(), max_changes);
         LogicalDecodingCtx {
             handle,
             kwabi: self,

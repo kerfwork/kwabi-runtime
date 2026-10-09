@@ -14,10 +14,13 @@
 
 LOAD :'bundle';
 
+DROP FUNCTION IF EXISTS kwabi_logical_batch_test();
 DROP FUNCTION IF EXISTS kwabi_logical_read_test();
 DROP FUNCTION IF EXISTS kwabi_logical_after_confirm_test();
 DROP FUNCTION IF EXISTS kwabi_logical_missing_slot_test();
 
+CREATE FUNCTION kwabi_logical_batch_test()
+    RETURNS bool AS :'bundle','kwabi_logical_batch_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_read_test()
     RETURNS bool AS :'bundle','kwabi_logical_read_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_after_confirm_test()
@@ -34,6 +37,10 @@ INSERT INTO kwabi_lg_t VALUES (1);
 INSERT INTO kwabi_lg_t VALUES (2);
 
 \echo ''
+\echo ''
+\echo '=== 0. a capped batch returns the cap, and an unconfirmed slot replays it ==='
+SELECT kwabi_logical_batch_test() AS logical_batch;
+
 \echo '=== 1. read: two committed inserts, with xids; confirm past the end raises; confirm to the end works ==='
 SELECT kwabi_logical_read_test() AS logical_read;
 

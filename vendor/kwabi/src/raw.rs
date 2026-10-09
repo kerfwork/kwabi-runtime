@@ -416,21 +416,15 @@ impl<'a> Raw<'a> {
     ///
     /// The runtime must provide this slot with exactly this signature, and
     /// every pointer argument must be valid for the use the slot makes of it.
-    pub unsafe fn logical_decoding_begin(&self, a0: *const c_char) -> *mut KwabiLogicalDecodingCtx {
+    pub unsafe fn logical_decoding_begin(
+        &self,
+        a0: *const c_char,
+        a1: i32,
+    ) -> *mut KwabiLogicalDecodingCtx {
         (self
             .api
             .logical_decoding_begin
-            .expect("logical_decoding_begin"))(a0)
-    }
-
-    /// Slot `logical_decoding_end`.
-    ///
-    /// # Safety
-    ///
-    /// The runtime must provide this slot with exactly this signature, and
-    /// every pointer argument must be valid for the use the slot makes of it.
-    pub unsafe fn logical_decoding_end(&self, a0: *mut KwabiLogicalDecodingCtx) {
-        (self.api.logical_decoding_end.expect("logical_decoding_end"))(a0)
+            .expect("logical_decoding_begin"))(a0, a1)
     }
 
     /// Slot `logical_decoding_read`.
@@ -463,6 +457,16 @@ impl<'a> Raw<'a> {
             .api
             .logical_decoding_confirm
             .expect("logical_decoding_confirm"))(a0, a1)
+    }
+
+    /// Slot `logical_decoding_end`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
+    pub unsafe fn logical_decoding_end(&self, a0: *mut KwabiLogicalDecodingCtx) {
+        (self.api.logical_decoding_end.expect("logical_decoding_end"))(a0)
     }
 
     /// Slot `output_plugin_startup`.
@@ -2323,9 +2327,9 @@ pub const SLOTS: &[&str] = &[
     "sequence_currval",
     "sequence_setval",
     "logical_decoding_begin",
-    "logical_decoding_end",
     "logical_decoding_read",
     "logical_decoding_confirm",
+    "logical_decoding_end",
     "output_plugin_startup",
     "output_plugin_shutdown",
     "bgworker_register",

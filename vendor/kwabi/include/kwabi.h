@@ -667,6 +667,10 @@ typedef struct KwabiV1 {
      * A decoding handle reads a logical slot's changes at-least-once.
      *
      *   logical_decoding_begin   opens a handle on a slot. Nothing is consumed.
+     *                            max_changes is a soft cap (0 = no cap): PostgreSQL
+     *                            stops only at a transaction boundary once the count
+     *                            is reached, so a batch always ends at a COMMIT. A
+     *                            transaction larger than the cap is returned whole.
      *   logical_decoding_read    returns the next change, in commit order. The
      *                            changes are the slot's own output plugin's
      *                            format (test_decoding, pgoutput, ...). Each
@@ -684,7 +688,7 @@ typedef struct KwabiV1 {
      * starting a new handle per batch. A slot that is never confirmed replays from
      * the same position on every begin, which is the at-least-once guarantee.
      */
-    KwabiLogicalDecodingCtx (*logical_decoding_begin)(const char *slot_name);
+    KwabiLogicalDecodingCtx (*logical_decoding_begin)(const char *slot_name, int32 max_changes);
     bool (*logical_decoding_read)(KwabiLogicalDecodingCtx ctx, int64 *lsn, int32 *xid, const char **data);
     void (*logical_decoding_confirm)(KwabiLogicalDecodingCtx ctx, int64 lsn);
     void (*logical_decoding_end)(KwabiLogicalDecodingCtx ctx);
