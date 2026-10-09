@@ -764,12 +764,14 @@ for M in "${MAJORS[@]}"; do
     NT_TYPE=$(grep -A2 'node_type_query' "$OUT" | grep -cE '^ t')
     NT_NAME=$(grep -A2 'node_type_name_query' "$OUT" | grep -cE '^ t')
     NT_CMD=$(grep -A2 'command_type_select' "$OUT" | grep -cE '^ t')
+    # Any ERROR other than the control's own raise is a check that did not run.
+    NT_ERR=$(grep -E "ERROR:" "$OUT" | grep -vc "node tree negative control fired as intended" || true)
 
-    if [ "$NT_FALSE" -eq 0 ] && [ "$NT_CONTROL" -ge 1 ] && \
+    if [ "$NT_FALSE" -eq 0 ] && [ "$NT_CONTROL" -ge 1 ] && [ "$NT_ERR" -eq 0 ] && \
        [ "$NT_TYPE" -ge 1 ] && [ "$NT_NAME" -ge 1 ] && [ "$NT_CMD" -ge 1 ]; then
         record PASS "$M" "node-tree-api green ($NT_TRUE assertions)"
     else
-        record FAIL "$M" "node-tree-api: true=$NT_TRUE false=$NT_FALSE control=$NT_CONTROL type=$NT_TYPE name=$NT_NAME cmd=$NT_CMD"
+        record FAIL "$M" "node-tree-api: true=$NT_TRUE false=$NT_FALSE errors=$NT_ERR control=$NT_CONTROL type=$NT_TYPE name=$NT_NAME cmd=$NT_CMD"
         echo "      see $OUT"
     fi
 
