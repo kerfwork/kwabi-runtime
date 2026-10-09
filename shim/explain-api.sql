@@ -23,11 +23,17 @@ LOAD :'bundle';
 
 DROP FUNCTION IF EXISTS kwabi_explain_get_index_name_test(int4);
 DROP FUNCTION IF EXISTS kwabi_explain_control();
+DROP FUNCTION IF EXISTS kwabi_explain_matches_sql_test(text);
+DROP FUNCTION IF EXISTS kwabi_explain_bad_option_test();
 
 CREATE FUNCTION kwabi_explain_get_index_name_test(int4)
     RETURNS text AS :'bundle','kwabi_explain_get_index_name_test' LANGUAGE C;
 CREATE FUNCTION kwabi_explain_control()
     RETURNS bool AS :'bundle','kwabi_explain_control' LANGUAGE C;
+CREATE FUNCTION kwabi_explain_matches_sql_test(text)
+    RETURNS bool AS :'bundle','kwabi_explain_matches_sql_test' LANGUAGE C;
+CREATE FUNCTION kwabi_explain_bad_option_test()
+    RETURNS bool AS :'bundle','kwabi_explain_bad_option_test' LANGUAGE C;
 
 \echo ''
 \echo '=== 1. explain_get_index_name ==='
@@ -48,4 +54,14 @@ SELECT kwabi_explain_get_index_name_test(1259) = 'pg_class' AS after_explain;
 SELECT kwabi_explain_control() AS control_should_not_return;
 
 \echo ''
+\echo ''
+\echo '=== 4. ExplainState through the ABI: EXPLAIN text must equal SQL EXPLAIN (COSTS OFF) ==='
+\echo '   the text from explain_query on a shim-owned ExplainState, byte for byte'
+SELECT kwabi_explain_matches_sql_test('SELECT 1') AS explain_matches_select;
+SELECT kwabi_explain_matches_sql_test('SELECT 1 FROM pg_class') AS explain_matches_scan;
+
+\echo ''
+\echo '=== 5. an unknown EXPLAIN option must raise through the ABI ==='
+SELECT kwabi_explain_bad_option_test() AS explain_bad_option_raises;
+
 \echo '=== explain-api tests complete ==='

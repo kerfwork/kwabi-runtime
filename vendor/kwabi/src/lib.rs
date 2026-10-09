@@ -106,115 +106,104 @@ pub struct KwabiV1 {
     pub spi_free_result: Option<unsafe extern "C" fn(*mut KwabiSPIResult)>,
     pub spi_result_ntuples: Option<unsafe extern "C" fn(*mut KwabiSPIResult) -> i32>,
     pub spi_result_get_value: Option<unsafe extern "C" fn(*mut KwabiSPIResult, i32, i32) -> u64>,
-    // Type system
-    pub type_input: extern "C" fn(u32, *const c_char, i32) -> u64,
-    pub type_output: extern "C" fn(u32, u64) -> *mut c_char,
-    pub type_recv: extern "C" fn(u32, *mut std::ffi::c_void) -> u64,
-    pub type_send: extern "C" fn(u32, u64, *mut std::ffi::c_void),
-    pub type_element_type: extern "C" fn(u32) -> u32,
-    pub type_length: extern "C" fn(u32) -> i16,
-    pub type_is_array: extern "C" fn(u32) -> bool,
-    pub type_is_composite: extern "C" fn(u32) -> bool,
-    pub type_base_type: extern "C" fn(u32) -> u32,
-    // Parser
-    pub parse_expr: extern "C" fn(*const c_char, *mut u32, i32) -> *mut KwabiNode,
-    pub parse_stmt: extern "C" fn(*const c_char) -> *mut KwabiNode,
-    pub parse_type: extern "C" fn(*const c_char) -> *mut KwabiNode,
-    pub free_node: extern "C" fn(*mut KwabiNode),
-    pub oper_left_type: extern "C" fn(u32) -> u32,
-    pub oper_right_type: extern "C" fn(u32) -> u32,
-    pub oper_result_type: extern "C" fn(u32) -> u32,
-    pub oper_is_commutative: extern "C" fn(u32) -> bool,
-    // Commands
-    pub extension_oid: extern "C" fn(*const c_char) -> u32,
-    pub extension_installed: extern "C" fn(*const c_char) -> bool,
-    pub extension_version: extern "C" fn(*const c_char) -> *const c_char,
-    pub sequence_nextval: extern "C" fn(u32) -> i64,
-    pub sequence_currval: extern "C" fn(u32) -> i64,
-    pub sequence_setval: extern "C" fn(u32, i64) -> i64,
-    // Replication
-    pub logical_decoding_begin: extern "C" fn(u32, i64) -> *mut KwabiLogicalDecodingCtx,
-    pub logical_decoding_end: extern "C" fn(*mut KwabiLogicalDecodingCtx),
-    pub logical_decoding_read:
+    pub type_input: Option<extern "C" fn(u32, *const c_char, i32) -> u64>,
+    pub type_output: Option<extern "C" fn(u32, u64) -> *mut c_char>,
+    pub type_recv: Option<extern "C" fn(u32, *mut std::ffi::c_void) -> u64>,
+    pub type_send: Option<extern "C" fn(u32, u64, *mut std::ffi::c_void)>,
+    pub type_element_type: Option<extern "C" fn(u32) -> u32>,
+    pub type_length: Option<extern "C" fn(u32) -> i16>,
+    pub type_is_array: Option<extern "C" fn(u32) -> bool>,
+    pub type_is_composite: Option<extern "C" fn(u32) -> bool>,
+    pub type_base_type: Option<extern "C" fn(u32) -> u32>,
+    pub parse_expr: Option<extern "C" fn(*const c_char, *mut u32, i32) -> *mut KwabiNode>,
+    pub parse_stmt: Option<extern "C" fn(*const c_char) -> *mut KwabiNode>,
+    pub parse_type: Option<extern "C" fn(*const c_char) -> *mut KwabiNode>,
+    pub free_node: Option<extern "C" fn(*mut KwabiNode)>,
+    pub oper_left_type: Option<extern "C" fn(u32) -> u32>,
+    pub oper_right_type: Option<extern "C" fn(u32) -> u32>,
+    pub oper_result_type: Option<extern "C" fn(u32) -> u32>,
+    pub oper_is_commutative: Option<extern "C" fn(u32) -> bool>,
+    pub extension_oid: Option<extern "C" fn(*const c_char) -> u32>,
+    pub extension_installed: Option<extern "C" fn(*const c_char) -> bool>,
+    pub extension_version: Option<extern "C" fn(*const c_char) -> *const c_char>,
+    pub sequence_nextval: Option<extern "C" fn(u32) -> i64>,
+    pub sequence_currval: Option<extern "C" fn(u32) -> i64>,
+    pub sequence_setval: Option<extern "C" fn(u32, i64) -> i64>,
+    pub logical_decoding_begin: Option<extern "C" fn(u32, i64) -> *mut KwabiLogicalDecodingCtx>,
+    pub logical_decoding_end: Option<extern "C" fn(*mut KwabiLogicalDecodingCtx)>,
+    pub logical_decoding_read: Option<
         extern "C" fn(*mut KwabiLogicalDecodingCtx, *mut i64, *mut *mut std::ffi::c_void) -> bool,
-    pub output_plugin_startup: extern "C" fn(*mut std::ffi::c_void),
-    pub output_plugin_shutdown: extern "C" fn(*mut std::ffi::c_void),
-    // Background workers
-    pub bgworker_register: extern "C" fn(
-        *const c_char,
-        extern "C" fn(*mut std::ffi::c_void),
-        *mut std::ffi::c_void,
-    ) -> u32,
-    pub bgworker_terminate: extern "C" fn(u32),
-    pub bgworker_is_running: extern "C" fn(u32) -> bool,
-    // Storage primitives
-    pub block_get_number: extern "C" fn(*mut std::ffi::c_void) -> u32,
-    pub block_get_offset: extern "C" fn(*mut std::ffi::c_void) -> u16,
-    pub block_is_valid: extern "C" fn(*mut std::ffi::c_void) -> bool,
-    pub slru_create: extern "C" fn(*const c_char, i32, i32),
-    pub slru_read: extern "C" fn(*const c_char, i64, *mut std::ffi::c_void),
-    pub slru_write: extern "C" fn(*const c_char, i64, *const std::ffi::c_void),
-    // Value nodes
-    pub value_is_null: extern "C" fn(*mut KwabiValue) -> bool,
-    pub value_get_datum: extern "C" fn(*mut KwabiValue) -> u64,
-    pub value_get_type: extern "C" fn(*mut KwabiValue) -> u32,
-    pub value_get_typmod: extern "C" fn(*mut KwabiValue) -> i32,
-    // Memory contexts
-    pub palloc: extern "C" fn(usize) -> *mut std::ffi::c_void,
-    pub palloc0: extern "C" fn(usize) -> *mut std::ffi::c_void,
-    pub repalloc: extern "C" fn(*mut std::ffi::c_void, usize) -> *mut std::ffi::c_void,
-    pub pfree: extern "C" fn(*mut std::ffi::c_void),
-    pub memory_context_current: extern "C" fn() -> *mut KwabiMemoryContext,
-    pub memory_context_switch_to: extern "C" fn(*mut KwabiMemoryContext) -> *mut KwabiMemoryContext,
+    >,
+    pub output_plugin_startup: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub output_plugin_shutdown: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub bgworker_register: Option<
+        extern "C" fn(
+            *const c_char,
+            extern "C" fn(*mut std::ffi::c_void),
+            *mut std::ffi::c_void,
+        ) -> u32,
+    >,
+    pub bgworker_terminate: Option<extern "C" fn(u32)>,
+    pub bgworker_is_running: Option<extern "C" fn(u32) -> bool>,
+    pub block_get_number: Option<extern "C" fn(*mut std::ffi::c_void) -> u32>,
+    pub block_get_offset: Option<extern "C" fn(*mut std::ffi::c_void) -> u16>,
+    pub block_is_valid: Option<extern "C" fn(*mut std::ffi::c_void) -> bool>,
+    pub slru_create: Option<extern "C" fn(*const c_char, i32, i32)>,
+    pub slru_read: Option<extern "C" fn(*const c_char, i64, *mut std::ffi::c_void)>,
+    pub slru_write: Option<extern "C" fn(*const c_char, i64, *const std::ffi::c_void)>,
+    pub value_is_null: Option<extern "C" fn(*mut KwabiValue) -> bool>,
+    pub value_get_datum: Option<extern "C" fn(*mut KwabiValue) -> u64>,
+    pub value_get_type: Option<extern "C" fn(*mut KwabiValue) -> u32>,
+    pub value_get_typmod: Option<extern "C" fn(*mut KwabiValue) -> i32>,
+    pub palloc: Option<extern "C" fn(usize) -> *mut std::ffi::c_void>,
+    pub palloc0: Option<extern "C" fn(usize) -> *mut std::ffi::c_void>,
+    pub repalloc: Option<extern "C" fn(*mut std::ffi::c_void, usize) -> *mut std::ffi::c_void>,
+    pub pfree: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub memory_context_current: Option<extern "C" fn() -> *mut KwabiMemoryContext>,
+    pub memory_context_switch_to:
+        Option<extern "C" fn(*mut KwabiMemoryContext) -> *mut KwabiMemoryContext>,
     pub memory_context_reset: Option<unsafe extern "C" fn(*mut KwabiMemoryContext)>,
     pub memory_context_delete: Option<unsafe extern "C" fn(*mut KwabiMemoryContext)>,
-    // Error handling
-    pub ereport: extern "C" fn(i32, *const c_char, ...),
-    pub elog: extern "C" fn(i32, *const c_char, ...),
-    pub error_message: extern "C" fn() -> *const c_char,
-    pub error_code: extern "C" fn() -> i32,
-    pub error_clear: extern "C" fn(),
-    // Relation cache
-    pub relation_open: extern "C" fn(u32, u32) -> *mut KwabiRelation,
-    pub relation_close: extern "C" fn(*mut KwabiRelation, u32),
-    pub relation_id: extern "C" fn(*mut KwabiRelation) -> u32,
-    pub relation_name: extern "C" fn(*mut KwabiRelation) -> *const c_char,
-    pub relation_namespace: extern "C" fn(*mut KwabiRelation) -> u32,
-    pub relation_tupledesc: extern "C" fn(*mut KwabiRelation) -> *mut std::ffi::c_void,
-    // System cache
-    pub syscache_get_oid: extern "C" fn(*const c_char, *const c_char, u64) -> u32,
-    pub syscache_get_tuple: extern "C" fn(*const c_char, u64) -> *mut std::ffi::c_void,
-    pub syscache_free_tuple: extern "C" fn(*mut std::ffi::c_void),
-    // Optimizer
+    pub ereport: Option<extern "C" fn(i32, *const c_char, ...)>,
+    pub elog: Option<extern "C" fn(i32, *const c_char, ...)>,
+    pub error_message: Option<extern "C" fn() -> *const c_char>,
+    pub error_code: Option<extern "C" fn() -> i32>,
+    pub error_clear: Option<extern "C" fn()>,
+    pub relation_open: Option<extern "C" fn(u32, u32) -> *mut KwabiRelation>,
+    pub relation_close: Option<extern "C" fn(*mut KwabiRelation, u32)>,
+    pub relation_id: Option<extern "C" fn(*mut KwabiRelation) -> u32>,
+    pub relation_name: Option<extern "C" fn(*mut KwabiRelation) -> *const c_char>,
+    pub relation_namespace: Option<extern "C" fn(*mut KwabiRelation) -> u32>,
+    pub relation_tupledesc: Option<extern "C" fn(*mut KwabiRelation) -> *mut std::ffi::c_void>,
+    pub syscache_get_oid: Option<extern "C" fn(*const c_char, *const c_char, u64) -> u32>,
+    pub syscache_get_tuple: Option<extern "C" fn(*const c_char, u64) -> *mut std::ffi::c_void>,
+    pub syscache_free_tuple: Option<extern "C" fn(*mut std::ffi::c_void)>,
     pub planner_info:
-        extern "C" fn(*mut KwabiNode, i32, *mut std::ffi::c_void) -> *mut KwabiPlannerInfo,
-    pub free_planner_info: extern "C" fn(*mut KwabiPlannerInfo),
-    pub planner_estimate_rows: extern "C" fn(*mut KwabiPlannerInfo, *mut std::ffi::c_void) -> f64,
-    pub planner_estimate_cost: extern "C" fn(*mut KwabiPlannerInfo, *mut std::ffi::c_void) -> f64,
+        Option<extern "C" fn(*mut KwabiNode, i32, *mut std::ffi::c_void) -> *mut KwabiPlannerInfo>,
+    pub free_planner_info: Option<extern "C" fn(*mut KwabiPlannerInfo)>,
+    pub planner_estimate_rows:
+        Option<extern "C" fn(*mut KwabiPlannerInfo, *mut std::ffi::c_void) -> f64>,
+    pub planner_estimate_cost:
+        Option<extern "C" fn(*mut KwabiPlannerInfo, *mut std::ffi::c_void) -> f64>,
     // Transactions
     //
     // Only the identity accessor. An extension reached from SQL is already
-    // inside a transaction, so start/commit/abort are not an ABI surface it can
-    // use (see the Transactions block in kwabi.h). `transaction_get_current_xid`
-    // returns 0 when the current transaction has no assigned XID yet.
-    pub transaction_get_current_xid: extern "C" fn() -> i64,
-    // Storage
-    pub shmem_alloc: extern "C" fn(usize) -> *mut std::ffi::c_void,
-    pub shmem_free: extern "C" fn(*mut std::ffi::c_void),
-    pub shmem_get: extern "C" fn(*const c_char, usize) -> *mut std::ffi::c_void,
-    pub lock_acquire: extern "C" fn(*mut std::ffi::c_void, u32),
-    pub lock_release: extern "C" fn(*mut std::ffi::c_void),
-    pub lock_held_by_me: extern "C" fn(*mut std::ffi::c_void) -> bool,
-    pub spin_acquire: extern "C" fn(*mut std::ffi::c_void),
-    pub spin_release: extern "C" fn(*mut std::ffi::c_void),
-    // Postmaster
-    pub autovacuum_is_running: extern "C" fn() -> bool,
-    pub autovacuum_naptime: extern "C" fn() -> i32,
-    pub syslogger_log: extern "C" fn(*const c_char),
-    // WAL replication
-    pub walsender_send: extern "C" fn(*const c_char, i32),
-    pub walsender_receive: extern "C" fn(*mut c_char, i32) -> i32,
-    pub walsender_is_connected: extern "C" fn() -> bool,
+    // inside a transaction,
+    pub transaction_get_current_xid: Option<extern "C" fn() -> i64>,
+    pub shmem_alloc: Option<extern "C" fn(usize) -> *mut std::ffi::c_void>,
+    pub shmem_free: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub shmem_get: Option<extern "C" fn(*const c_char, usize) -> *mut std::ffi::c_void>,
+    pub lock_acquire: Option<extern "C" fn(*mut std::ffi::c_void, u32)>,
+    pub lock_release: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub lock_held_by_me: Option<extern "C" fn(*mut std::ffi::c_void) -> bool>,
+    pub spin_acquire: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub spin_release: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub autovacuum_is_running: Option<extern "C" fn() -> bool>,
+    pub autovacuum_naptime: Option<extern "C" fn() -> i32>,
+    pub syslogger_log: Option<extern "C" fn(*const c_char)>,
+    pub walsender_send: Option<extern "C" fn(*const c_char, i32)>,
+    pub walsender_receive: Option<extern "C" fn(*mut c_char, i32) -> i32>,
+    pub walsender_is_connected: Option<extern "C" fn() -> bool>,
     // Commands (defrem)
     //
     // `Option<unsafe extern "C" fn>`, not a bare pointer: the header's rule is
@@ -225,82 +214,82 @@ pub struct KwabiV1 {
     pub defrem_create: Option<unsafe extern "C" fn(*const c_char, *const c_char, *const c_char)>,
     pub defrem_alter: Option<unsafe extern "C" fn(*const c_char, *const c_char)>,
     pub defrem_drop: Option<unsafe extern "C" fn(*const c_char)>,
-    // Node trees
-    pub node_type: extern "C" fn(*mut KwabiNode) -> u32,
-    pub node_type_name: extern "C" fn(*mut KwabiNode) -> *const c_char,
-    pub node_get_list: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub node_list_length: extern "C" fn(*mut KwabiNode) -> i32,
-    pub node_list_get: extern "C" fn(*mut KwabiNode, i32) -> *mut KwabiNode,
-    pub query_command_type: extern "C" fn(*mut KwabiNode) -> u32,
-    pub query_rtable: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub query_target_list: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub query_returning_list: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub query_jointree: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub query_group_clause: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub query_sort_clause: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub query_limit_offset: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub query_limit_count: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub query_has_for_update: extern "C" fn(*mut KwabiNode) -> bool,
-    pub query_has_row_security: extern "C" fn(*mut KwabiNode) -> bool,
-    pub planned_stmt_plan_tree: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub planned_stmt_rtable: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub planned_stmt_result_relations: extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void,
-    pub planned_stmt_has_returning: extern "C" fn(*mut KwabiNode) -> bool,
-    pub planned_stmt_has_modifying_cte: extern "C" fn(*mut KwabiNode) -> bool,
-    pub planned_stmt_is_utility: extern "C" fn(*mut KwabiNode) -> bool,
-    // Tuples
-    pub tuple_natts: extern "C" fn(*mut std::ffi::c_void) -> i32,
-    pub tuple_typeid: extern "C" fn(*mut std::ffi::c_void, i32) -> u32,
-    pub tuple_typmod: extern "C" fn(*mut std::ffi::c_void, i32) -> i32,
-    pub tuple_attname: extern "C" fn(*mut std::ffi::c_void, i32) -> *const c_char,
-    pub tuple_attisdropped: extern "C" fn(*mut std::ffi::c_void, i32) -> bool,
-    pub tuple_attnum: extern "C" fn(*mut std::ffi::c_void, *const c_char) -> i32,
+    pub node_type: Option<extern "C" fn(*mut KwabiNode) -> u32>,
+    pub node_type_name: Option<extern "C" fn(*mut KwabiNode) -> *const c_char>,
+    pub node_get_list: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub node_list_length: Option<extern "C" fn(*mut KwabiNode) -> i32>,
+    pub node_list_get: Option<extern "C" fn(*mut KwabiNode, i32) -> *mut KwabiNode>,
+    pub query_command_type: Option<extern "C" fn(*mut KwabiNode) -> u32>,
+    pub query_rtable: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub query_target_list: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub query_returning_list: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub query_jointree: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub query_group_clause: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub query_sort_clause: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub query_limit_offset: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub query_limit_count: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub query_has_for_update: Option<extern "C" fn(*mut KwabiNode) -> bool>,
+    pub query_has_row_security: Option<extern "C" fn(*mut KwabiNode) -> bool>,
+    pub planned_stmt_plan_tree: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub planned_stmt_rtable: Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub planned_stmt_result_relations:
+        Option<extern "C" fn(*mut KwabiNode) -> *mut std::ffi::c_void>,
+    pub planned_stmt_has_returning: Option<extern "C" fn(*mut KwabiNode) -> bool>,
+    pub planned_stmt_has_modifying_cte: Option<extern "C" fn(*mut KwabiNode) -> bool>,
+    pub planned_stmt_is_utility: Option<extern "C" fn(*mut KwabiNode) -> bool>,
+    pub tuple_natts: Option<extern "C" fn(*mut std::ffi::c_void) -> i32>,
+    pub tuple_typeid: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> u32>,
+    pub tuple_typmod: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> i32>,
+    pub tuple_attname: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> *const c_char>,
+    pub tuple_attisdropped: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> bool>,
+    pub tuple_attnum: Option<extern "C" fn(*mut std::ffi::c_void, *const c_char) -> i32>,
     pub heap_tuple_getattr:
-        extern "C" fn(*mut std::ffi::c_void, i32, *mut std::ffi::c_void, *mut bool) -> u64,
-    pub heap_tuple_setattr: extern "C" fn(
-        *mut std::ffi::c_void,
-        i32,
-        u64,
-        *mut std::ffi::c_void,
-    ) -> *mut std::ffi::c_void,
-    pub heap_tuple_tableoid: extern "C" fn(*mut std::ffi::c_void) -> u32,
-    pub heap_tuple_tid: extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void,
-    pub slot_isnull: extern "C" fn(*mut std::ffi::c_void, i32) -> bool,
-    pub slot_getattr: extern "C" fn(*mut std::ffi::c_void, i32, *mut bool) -> u64,
-    pub slot_tupledesc: extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void,
-    // Table AM
-    pub table_am_get: extern "C" fn(u32) -> *mut KwabiTableAm,
-    pub table_am_beginscan: extern "C" fn(
-        *mut KwabiTableAm,
-        *mut std::ffi::c_void,
-        i32,
-        *mut std::ffi::c_void,
-    ) -> *mut std::ffi::c_void,
-    pub table_am_endscan: extern "C" fn(*mut std::ffi::c_void),
-    pub table_am_getnext: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool,
+        Option<extern "C" fn(*mut std::ffi::c_void, i32, *mut std::ffi::c_void, *mut bool) -> u64>,
+    pub heap_tuple_setattr: Option<
+        extern "C" fn(
+            *mut std::ffi::c_void,
+            i32,
+            u64,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void,
+    >,
+    pub heap_tuple_tableoid: Option<extern "C" fn(*mut std::ffi::c_void) -> u32>,
+    pub heap_tuple_tid: Option<extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>,
+    pub slot_isnull: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> bool>,
+    pub slot_getattr: Option<extern "C" fn(*mut std::ffi::c_void, i32, *mut bool) -> u64>,
+    pub slot_tupledesc: Option<extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>,
+    pub table_am_get: Option<extern "C" fn(u32) -> *mut KwabiTableAm>,
+    pub table_am_beginscan: Option<
+        extern "C" fn(
+            *mut KwabiTableAm,
+            *mut std::ffi::c_void,
+            i32,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void,
+    >,
+    pub table_am_endscan: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub table_am_getnext:
+        Option<extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool>,
     pub table_am_insert:
-        extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32, *mut std::ffi::c_void),
-    pub table_am_update: extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32),
-    pub table_am_delete: extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32),
-    // Executor
-    pub executor_start: extern "C" fn(*mut std::ffi::c_void, i32) -> *mut KwabiEState,
-    pub executor_run: extern "C" fn(*mut KwabiEState, i32, i64, bool),
-    pub executor_finish: extern "C" fn(*mut KwabiEState),
-    pub executor_end: extern "C" fn(*mut KwabiEState),
-    pub executor_getnext: extern "C" fn(*mut KwabiEState) -> *mut std::ffi::c_void,
-    // Buffer manager
-    pub buffer_get: extern "C" fn(*mut std::ffi::c_void, u32) -> *mut std::ffi::c_void,
-    pub buffer_release: extern "C" fn(*mut std::ffi::c_void),
-    pub buffer_get_page: extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void,
-    pub buffer_mark_dirty: extern "C" fn(*mut std::ffi::c_void),
-    // Locks
-    pub lwlock_acquire: extern "C" fn(*mut std::ffi::c_void, u32),
-    pub lwlock_release: extern "C" fn(*mut std::ffi::c_void),
-    pub lwlock_held_by_me: extern "C" fn(*mut std::ffi::c_void) -> bool,
-    pub lwlock_cond_acquire: extern "C" fn(*mut std::ffi::c_void, u32) -> bool,
-    pub spinlock_acquire: extern "C" fn(*mut std::ffi::c_void),
-    pub spinlock_release: extern "C" fn(*mut std::ffi::c_void),
-    pub spinlock_held_by_me: extern "C" fn(*mut std::ffi::c_void) -> bool,
+        Option<extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32, *mut std::ffi::c_void)>,
+    pub table_am_update: Option<extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32)>,
+    pub table_am_delete: Option<extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32)>,
+    pub executor_start: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> *mut KwabiEState>,
+    pub executor_run: Option<extern "C" fn(*mut KwabiEState, i32, i64, bool)>,
+    pub executor_finish: Option<extern "C" fn(*mut KwabiEState)>,
+    pub executor_end: Option<extern "C" fn(*mut KwabiEState)>,
+    pub executor_getnext: Option<extern "C" fn(*mut KwabiEState) -> *mut std::ffi::c_void>,
+    pub buffer_get: Option<extern "C" fn(*mut std::ffi::c_void, u32) -> *mut std::ffi::c_void>,
+    pub buffer_release: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub buffer_get_page: Option<extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>,
+    pub buffer_mark_dirty: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub lwlock_acquire: Option<extern "C" fn(*mut std::ffi::c_void, u32)>,
+    pub lwlock_release: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub lwlock_held_by_me: Option<extern "C" fn(*mut std::ffi::c_void) -> bool>,
+    pub lwlock_cond_acquire: Option<extern "C" fn(*mut std::ffi::c_void, u32) -> bool>,
+    pub spinlock_acquire: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub spinlock_release: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub spinlock_held_by_me: Option<extern "C" fn(*mut std::ffi::c_void) -> bool>,
     // GUC
     //
     // `Option<unsafe extern "C" fn>`, not a bare pointer: the header's rule is
@@ -316,55 +305,54 @@ pub struct KwabiV1 {
     pub guc_set_string: Option<unsafe extern "C" fn(*const c_char, *const c_char)>,
     pub guc_set_bool: Option<unsafe extern "C" fn(*const c_char, bool)>,
     pub guc_set_float: Option<unsafe extern "C" fn(*const c_char, f64)>,
-    // Explain
-    pub explain_query: extern "C" fn(
-        *mut std::ffi::c_void,
-        *mut std::ffi::c_void,
-        *mut std::ffi::c_void,
-        *const c_char,
-        *mut std::ffi::c_void,
-        *mut std::ffi::c_void,
-    ),
-    pub explain_get_index_name: extern "C" fn(u32) -> *const c_char,
-    // Vacuum
+    pub explain_query: Option<
+        extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *const c_char,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ),
+    >,
+    pub explain_state_new: Option<extern "C" fn() -> *mut std::ffi::c_void>,
+    pub explain_state_set_option: Option<extern "C" fn(*mut std::ffi::c_void, *const c_char, bool)>,
+    pub explain_state_set_format: Option<extern "C" fn(*mut std::ffi::c_void, i32)>,
+    pub explain_state_text: Option<extern "C" fn(*mut std::ffi::c_void) -> *const c_char>,
+    pub explain_state_free: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub explain_get_index_name: Option<extern "C" fn(u32) -> *const c_char>,
     pub vacuum_rel:
-        extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void),
+        Option<extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void)>,
     pub vacuum_analyze_rel:
-        extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void),
-    // Triggers
-    pub trigger_desc: extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void,
-    pub trigger_count: extern "C" fn(*mut std::ffi::c_void) -> i32,
-    pub trigger_get: extern "C" fn(*mut std::ffi::c_void, i32) -> *mut std::ffi::c_void,
-    // Replication internals
-    pub reorderbuffer_get_lsn: extern "C" fn(*mut KwabiReorderBuffer) -> i64,
-    pub reorderbuffer_get_xid: extern "C" fn(*mut KwabiReorderBuffer, u32) -> i64,
-    pub reorderbuffer_get_changes: extern "C" fn(*mut KwabiReorderBuffer, u32) -> i32,
-    pub slot_get_lsn: extern "C" fn(u32) -> i64,
-    pub slot_get_catalog_xmin: extern "C" fn(u32) -> i64,
-    pub slot_is_active: extern "C" fn(u32) -> bool,
-    // Postmaster
-    pub postmaster_is_alive: extern "C" fn() -> bool,
-    pub postmaster_get_child_pid: extern "C" fn(u32) -> i32,
-    // Item pointers
-    pub itempointer_get_block_number: extern "C" fn(*mut std::ffi::c_void) -> u32,
-    pub itempointer_get_offset_number: extern "C" fn(*mut std::ffi::c_void) -> u16,
-    pub itempointer_is_valid: extern "C" fn(*mut std::ffi::c_void) -> bool,
-    // Relations
-    pub rel_id: extern "C" fn(*mut KwabiRelation) -> u32,
-    pub rel_name: extern "C" fn(*mut KwabiRelation) -> *const c_char,
-    pub rel_namespace: extern "C" fn(*mut KwabiRelation) -> u32,
-    pub rel_relkind: extern "C" fn(*mut KwabiRelation) -> i8,
-    pub rel_relam: extern "C" fn(*mut KwabiRelation) -> u32,
-    pub rel_tupledesc: extern "C" fn(*mut KwabiRelation) -> *mut std::ffi::c_void,
-    pub rel_index_list: extern "C" fn(*mut KwabiRelation) -> *mut std::ffi::c_void,
-    // String info
-    pub stringinfo_init: extern "C" fn(*mut std::ffi::c_void),
-    pub stringinfo_reset: extern "C" fn(*mut std::ffi::c_void),
-    pub stringinfo_append: extern "C" fn(*mut std::ffi::c_void, *const c_char),
-    pub stringinfo_append_char: extern "C" fn(*mut std::ffi::c_void, i8),
-    pub stringinfo_append_int: extern "C" fn(*mut std::ffi::c_void, i64),
-    pub stringinfo_data: extern "C" fn(*mut std::ffi::c_void) -> *const c_char,
-    pub stringinfo_len: extern "C" fn(*mut std::ffi::c_void) -> i32,
+        Option<extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void)>,
+    pub trigger_desc: Option<extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>,
+    pub trigger_count: Option<extern "C" fn(*mut std::ffi::c_void) -> i32>,
+    pub trigger_get: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> *mut std::ffi::c_void>,
+    pub reorderbuffer_get_lsn: Option<extern "C" fn(*mut KwabiReorderBuffer) -> i64>,
+    pub reorderbuffer_get_xid: Option<extern "C" fn(*mut KwabiReorderBuffer, u32) -> i64>,
+    pub reorderbuffer_get_changes: Option<extern "C" fn(*mut KwabiReorderBuffer, u32) -> i32>,
+    pub slot_get_lsn: Option<extern "C" fn(u32) -> i64>,
+    pub slot_get_catalog_xmin: Option<extern "C" fn(u32) -> i64>,
+    pub slot_is_active: Option<extern "C" fn(u32) -> bool>,
+    pub postmaster_is_alive: Option<extern "C" fn() -> bool>,
+    pub postmaster_get_child_pid: Option<extern "C" fn(u32) -> i32>,
+    pub itempointer_get_block_number: Option<extern "C" fn(*mut std::ffi::c_void) -> u32>,
+    pub itempointer_get_offset_number: Option<extern "C" fn(*mut std::ffi::c_void) -> u16>,
+    pub itempointer_is_valid: Option<extern "C" fn(*mut std::ffi::c_void) -> bool>,
+    pub rel_id: Option<extern "C" fn(*mut KwabiRelation) -> u32>,
+    pub rel_name: Option<extern "C" fn(*mut KwabiRelation) -> *const c_char>,
+    pub rel_namespace: Option<extern "C" fn(*mut KwabiRelation) -> u32>,
+    pub rel_relkind: Option<extern "C" fn(*mut KwabiRelation) -> i8>,
+    pub rel_relam: Option<extern "C" fn(*mut KwabiRelation) -> u32>,
+    pub rel_tupledesc: Option<extern "C" fn(*mut KwabiRelation) -> *mut std::ffi::c_void>,
+    pub rel_index_list: Option<extern "C" fn(*mut KwabiRelation) -> *mut std::ffi::c_void>,
+    pub stringinfo_init: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub stringinfo_reset: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub stringinfo_append: Option<extern "C" fn(*mut std::ffi::c_void, *const c_char)>,
+    pub stringinfo_append_char: Option<extern "C" fn(*mut std::ffi::c_void, i8)>,
+    pub stringinfo_append_int: Option<extern "C" fn(*mut std::ffi::c_void, i64)>,
+    pub stringinfo_data: Option<extern "C" fn(*mut std::ffi::c_void) -> *const c_char>,
+    pub stringinfo_len: Option<extern "C" fn(*mut std::ffi::c_void) -> i32>,
 
     // ---- appended after stringinfo (mirrors kwabi.h) ---------------------
     //
@@ -664,7 +652,7 @@ impl Kwabi {
 
     /// The runtime's last error, as a message string.
     pub fn error(&self) -> String {
-        let ptr = (self.api.error_message)();
+        let ptr = (self.api.error_message.expect("error_message"))();
         if ptr.is_null() {
             return String::new();
         }
@@ -675,22 +663,22 @@ impl Kwabi {
 
     /// Allocate memory in the current memory context.
     pub fn palloc(&self, size: usize) -> *mut u8 {
-        (self.api.palloc)(size) as *mut u8
+        (self.api.palloc.expect("palloc"))(size) as *mut u8
     }
 
     /// Allocate zeroed memory in the current memory context.
     pub fn palloc0(&self, size: usize) -> *mut u8 {
-        (self.api.palloc0)(size) as *mut u8
+        (self.api.palloc0.expect("palloc0"))(size) as *mut u8
     }
 
     /// Reallocate memory.
     pub fn repalloc(&self, ptr: *mut u8, size: usize) -> *mut u8 {
-        (self.api.repalloc)(ptr as *mut _, size) as *mut u8
+        (self.api.repalloc.expect("repalloc"))(ptr as *mut _, size) as *mut u8
     }
 
     /// Free memory.
     pub fn pfree(&self, ptr: *mut u8) {
-        (self.api.pfree)(ptr as *mut _);
+        (self.api.pfree.expect("pfree"))(ptr as *mut _);
     }
 
     // ---- SPI ----
@@ -775,7 +763,7 @@ impl Kwabi {
     /// Open a relation (table).
     pub fn relation_open(&self, relid: u32) -> Result<Relation<'_>, KwabiError> {
         let handle = catch_unwind(AssertUnwindSafe(|| {
-            (self.api.relation_open)(relid, 1) // KWABI_LOCKMODE_SHARE
+            (self.api.relation_open.expect("relation_open"))(relid, 1) // KWABI_LOCKMODE_SHARE
         }))
         .map_err(|_| KwabiError {
             code: -1,
@@ -807,7 +795,10 @@ impl Kwabi {
     /// from SQL is already inside a transaction and cannot control its
     /// boundaries. Use the runtime's `try_body` for partial-rollback atomicity.
     pub fn current_xid(&self) -> i64 {
-        (self.api.transaction_get_current_xid)()
+        (self
+            .api
+            .transaction_get_current_xid
+            .expect("transaction_get_current_xid"))()
     }
 
     // ---- GUC ----
@@ -890,7 +881,7 @@ impl Kwabi {
             code: -1,
             message: "invalid extension name".to_string(),
         })?;
-        Ok((self.api.extension_installed)(c_name.as_ptr()))
+        Ok((self.api.extension_installed.expect("extension_installed"))(c_name.as_ptr()))
     }
 
     /// Get an extension's OID.
@@ -899,19 +890,25 @@ impl Kwabi {
             code: -1,
             message: "invalid extension name".to_string(),
         })?;
-        Ok((self.api.extension_oid)(c_name.as_ptr()))
+        Ok((self.api.extension_oid.expect("extension_oid"))(
+            c_name.as_ptr(),
+        ))
     }
 
     // ---- Sequences ----
 
     /// Get the next value from a sequence.
     pub fn sequence_nextval(&self, seq_oid: u32) -> Result<i64, KwabiError> {
-        Ok((self.api.sequence_nextval)(seq_oid))
+        Ok((self.api.sequence_nextval.expect("sequence_nextval"))(
+            seq_oid,
+        ))
     }
 
     /// Get the current value of a sequence.
     pub fn sequence_currval(&self, seq_oid: u32) -> Result<i64, KwabiError> {
-        Ok((self.api.sequence_currval)(seq_oid))
+        Ok((self.api.sequence_currval.expect("sequence_currval"))(
+            seq_oid,
+        ))
     }
 
     // ---- Background workers ----
@@ -927,49 +924,56 @@ impl Kwabi {
             code: -1,
             message: "invalid worker name".to_string(),
         })?;
-        Ok((self.api.bgworker_register)(c_name.as_ptr(), main, arg))
+        Ok((self.api.bgworker_register.expect("bgworker_register"))(
+            c_name.as_ptr(),
+            main,
+            arg,
+        ))
     }
 
     // ---- Locks ----
 
     /// Acquire a lightweight lock.
     pub fn lwlock_acquire(&self, lock: *mut std::ffi::c_void, mode: u32) {
-        (self.api.lock_acquire)(lock as *mut _, mode);
+        (self.api.lock_acquire.expect("lock_acquire"))(lock as *mut _, mode);
     }
 
     /// Release a lightweight lock.
     pub fn lwlock_release(&self, lock: *mut std::ffi::c_void) {
-        (self.api.lock_release)(lock as *mut _);
+        (self.api.lock_release.expect("lock_release"))(lock as *mut _);
     }
 
     // ---- Shared memory ----
 
     /// Allocate shared memory.
     pub fn shmem_alloc(&self, size: usize) -> *mut u8 {
-        (self.api.shmem_alloc)(size) as *mut u8
+        (self.api.shmem_alloc.expect("shmem_alloc"))(size) as *mut u8
     }
 
     /// Free shared memory.
     pub fn shmem_free(&self, ptr: *mut u8) {
-        (self.api.shmem_free)(ptr as *mut _);
+        (self.api.shmem_free.expect("shmem_free"))(ptr as *mut _);
     }
 
     // ---- StringInfo ----
 
     /// Initialize a StringInfo.
     pub fn stringinfo_init(&self, str: *mut std::ffi::c_void) {
-        (self.api.stringinfo_init)(str as *mut _);
+        (self.api.stringinfo_init.expect("stringinfo_init"))(str as *mut _);
     }
 
     /// Reset a StringInfo.
     pub fn stringinfo_reset(&self, str: *mut std::ffi::c_void) {
-        (self.api.stringinfo_reset)(str as *mut _);
+        (self.api.stringinfo_reset.expect("stringinfo_reset"))(str as *mut _);
     }
 
     /// Append to a StringInfo.
     pub fn stringinfo_append(&self, str: *mut std::ffi::c_void, data: &str) {
         if let Ok(c_data) = CString::new(data) {
-            (self.api.stringinfo_append)(str as *mut _, c_data.as_ptr());
+            (self.api.stringinfo_append.expect("stringinfo_append"))(
+                str as *mut _,
+                c_data.as_ptr(),
+            );
         }
     }
 
@@ -977,17 +981,19 @@ impl Kwabi {
 
     /// Get the element type of an array type.
     pub fn type_element_type(&self, type_oid: u32) -> Result<u32, KwabiError> {
-        Ok((self.api.type_element_type)(type_oid))
+        Ok((self.api.type_element_type.expect("type_element_type"))(
+            type_oid,
+        ))
     }
 
     /// Get the length of a type.
     pub fn type_length(&self, type_oid: u32) -> Result<i16, KwabiError> {
-        Ok((self.api.type_length)(type_oid))
+        Ok((self.api.type_length.expect("type_length"))(type_oid))
     }
 
     /// Check if a type is an array.
     pub fn type_is_array(&self, type_oid: u32) -> Result<bool, KwabiError> {
-        Ok((self.api.type_is_array)(type_oid))
+        Ok((self.api.type_is_array.expect("type_is_array"))(type_oid))
     }
 
     // ---- Parser ----
@@ -1000,7 +1006,7 @@ impl Kwabi {
         })?;
 
         let handle = catch_unwind(AssertUnwindSafe(|| {
-            (self.api.parse_expr)(c_sql.as_ptr(), ptr::null_mut(), 0)
+            (self.api.parse_expr.expect("parse_expr"))(c_sql.as_ptr(), ptr::null_mut(), 0)
         }))
         .map_err(|_| KwabiError {
             code: -1,
@@ -1028,13 +1034,13 @@ impl Kwabi {
 impl<'a> Relation<'a> {
     /// Get the relation's OID.
     pub fn oid(&self) -> u32 {
-        (self.kwabi.api.relation_id)(self.handle)
+        (self.kwabi.api.relation_id.expect("relation_id"))(self.handle)
     }
 
     /// Get the relation's name.
     pub fn name(&self) -> String {
         unsafe {
-            let ptr = (self.kwabi.api.relation_name)(self.handle);
+            let ptr = (self.kwabi.api.relation_name.expect("relation_name"))(self.handle);
             if ptr.is_null() {
                 return String::new();
             }
@@ -1044,12 +1050,20 @@ impl<'a> Relation<'a> {
 
     /// Get the relation's namespace OID.
     pub fn namespace(&self) -> u32 {
-        (self.kwabi.api.relation_namespace)(self.handle)
+        (self
+            .kwabi
+            .api
+            .relation_namespace
+            .expect("relation_namespace"))(self.handle)
     }
 
     /// Get the relation's tuple descriptor.
     pub fn tupdesc(&self) -> *mut std::ffi::c_void {
-        (self.kwabi.api.relation_tupledesc)(self.handle) as *mut _
+        (self
+            .kwabi
+            .api
+            .relation_tupledesc
+            .expect("relation_tupledesc"))(self.handle) as *mut _
     }
 
     /// Get the number of attributes.
@@ -1058,13 +1072,14 @@ impl<'a> Relation<'a> {
         if tupdesc.is_null() {
             return 0;
         }
-        (self.kwabi.api.tuple_natts)(tupdesc)
+        (self.kwabi.api.tuple_natts.expect("tuple_natts"))(tupdesc)
     }
 }
 
 impl<'a> Drop for Relation<'a> {
     fn drop(&mut self) {
-        (self.kwabi.api.relation_close)(self.handle, 1); // KWABI_LOCKMODE_SHARE
+        (self.kwabi.api.relation_close.expect("relation_close"))(self.handle, 1);
+        // KWABI_LOCKMODE_SHARE
     }
 }
 
@@ -1075,13 +1090,13 @@ impl<'a> Drop for Relation<'a> {
 impl<'a> Node<'a> {
     /// Get the node type.
     pub fn node_type(&self) -> u32 {
-        (self.kwabi.api.node_type)(self.handle)
+        (self.kwabi.api.node_type.expect("node_type"))(self.handle)
     }
 
     /// Get the node type name.
     pub fn type_name(&self) -> String {
         unsafe {
-            let ptr = (self.kwabi.api.node_type_name)(self.handle);
+            let ptr = (self.kwabi.api.node_type_name.expect("node_type_name"))(self.handle);
             if ptr.is_null() {
                 return String::new();
             }
@@ -1091,12 +1106,12 @@ impl<'a> Node<'a> {
 
     /// Get the number of list elements.
     pub fn list_length(&self) -> i32 {
-        (self.kwabi.api.node_list_length)(self.handle)
+        (self.kwabi.api.node_list_length.expect("node_list_length"))(self.handle)
     }
 
     /// Get a list element.
     pub fn list_get(&self, index: i32) -> Option<Node<'a>> {
-        let handle = (self.kwabi.api.node_list_get)(self.handle, index);
+        let handle = (self.kwabi.api.node_list_get.expect("node_list_get"))(self.handle, index);
         if handle.is_null() {
             return None;
         }
@@ -1109,7 +1124,7 @@ impl<'a> Node<'a> {
 
 impl<'a> Drop for Node<'a> {
     fn drop(&mut self) {
-        (self.kwabi.api.free_node)(self.handle);
+        (self.kwabi.api.free_node.expect("free_node"))(self.handle);
     }
 }
 
@@ -1191,7 +1206,12 @@ impl<'a> LogicalDecodingCtx<'a> {
     pub fn read(&self) -> Option<(i64, *mut std::ffi::c_void)> {
         let mut lsn: i64 = 0;
         let mut data: *mut std::ffi::c_void = ptr::null_mut();
-        let success = (self.kwabi.api.logical_decoding_read)(self.handle, &mut lsn, &mut data);
+        let success =
+            (self
+                .kwabi
+                .api
+                .logical_decoding_read
+                .expect("logical_decoding_read"))(self.handle, &mut lsn, &mut data);
         if success {
             Some((lsn, data))
         } else {
@@ -1202,7 +1222,11 @@ impl<'a> LogicalDecodingCtx<'a> {
 
 impl<'a> Drop for LogicalDecodingCtx<'a> {
     fn drop(&mut self) {
-        (self.kwabi.api.logical_decoding_end)(self.handle);
+        (self
+            .kwabi
+            .api
+            .logical_decoding_end
+            .expect("logical_decoding_end"))(self.handle);
     }
 }
 
@@ -1269,6 +1293,28 @@ pub mod nightly {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The SDK mirror of KwabiV1 must have exactly the slots the header declares.
+    // Every slot is one pointer, and `version` is a u32 padded to pointer size.
+    // A header change that adds, removes or drops a slot changes the size and fails here.
+    #[test]
+    fn kwabi_v1_mirror_matches_header_layout() {
+        let header = include_str!("../include/kwabi.h");
+        let start = header
+            .find("typedef struct KwabiV1 {")
+            .expect("KwabiV1 in header");
+        let end = header[start..].find("} KwabiV1;").expect("end of KwabiV1") + start;
+        let slots = header[start..end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with(['*', '/']))
+            .map(|l| l.matches("(*").count())
+            .sum::<usize>();
+        assert_eq!(
+            std::mem::size_of::<KwabiV1>(),
+            std::mem::size_of::<usize>() * (1 + slots),
+            "KwabiV1 has {slots} slots in the header"
+        );
+    }
 
     #[test]
     fn test_version() {

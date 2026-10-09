@@ -315,6 +315,12 @@ pub struct KwabiV1 {
             *mut c_void,
         ) -> (),
     >,
+    pub explain_state_new: Option<unsafe extern "C" fn() -> *mut c_void>,
+    pub explain_state_set_option:
+        Option<unsafe extern "C" fn(*mut c_void, *const c_char, bool) -> ()>,
+    pub explain_state_set_format: Option<unsafe extern "C" fn(*mut c_void, c_int) -> ()>,
+    pub explain_state_text: Option<unsafe extern "C" fn(*mut c_void) -> *const c_char>,
+    pub explain_state_free: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub explain_get_index_name: Option<unsafe extern "C" fn(u32) -> *const c_char>,
     pub vacuum_rel: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> ()>,
     pub vacuum_analyze_rel:
@@ -358,7 +364,7 @@ pub struct KwabiV1 {
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 201;
+    pub const FIELD_COUNT: usize = 206;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -531,6 +537,11 @@ impl Default for KwabiV1 {
             guc_set_bool: None,
             guc_set_float: None,
             explain_query: None,
+            explain_state_new: None,
+            explain_state_set_option: None,
+            explain_state_set_format: None,
+            explain_state_text: None,
+            explain_state_free: None,
             explain_get_index_name: None,
             vacuum_rel: None,
             vacuum_analyze_rel: None,

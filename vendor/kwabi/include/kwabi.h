@@ -848,8 +848,28 @@ typedef struct KwabiV1 {
     void (*guc_set_bool)(const char *name, bool value);
     void (*guc_set_float)(const char *name, double value);
 
-    /* ---- Explain ---- */
+    /* ---- Explain ----
+     * An ExplainState is created by explain_state_new and freed by
+     * explain_state_free. The shim gives each one its own memory context, so
+     * free releases all of it. explain_state_text is valid until the state is
+     * freed or explain_query runs on it again.
+     *
+     * format is an int (not an enum, which has implementation-defined width
+     * at the ABI): 0 = text, 1 = xml, 2 = json, 3 = yaml.
+     *
+     * explain_state_set_option takes a PostgreSQL EXPLAIN option name (verbose,
+     * costs, buffers, wal, timing, summary, memory, settings, generic, analyze).
+     * An unknown name raises. The version-specific options raise on majors that
+     * do not have them.
+     *
+     * explain_query runs ExplainOnePlan on the plan in queryDesc. With analyze
+     * set, the plan runs, as it does for SQL EXPLAIN ANALYZE. */
     void (*explain_query)(KwabiQueryDesc queryDesc, KwabiIntoClause into, KwabiExplainState es, const char *queryString, KwabiParamListInfo params, KwabiQueryEnvironment queryEnv);
+    KwabiExplainState (*explain_state_new)(void);
+    void (*explain_state_set_option)(KwabiExplainState es, const char *name, bool value);
+    void (*explain_state_set_format)(KwabiExplainState es, int format);
+    const char *(*explain_state_text)(KwabiExplainState es);
+    void (*explain_state_free)(KwabiExplainState es);
     const char *(*explain_get_index_name)(Oid indexOid);
 
     /* ---- Vacuum ---- */
