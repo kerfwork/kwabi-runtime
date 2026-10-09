@@ -78,6 +78,70 @@ check "control: a valid value is not an error" "ok" "$(STATE "SELECT '4'::uint64
 check "overflow is 22003" "22003" "$(STATE "SELECT '18446744073709551616'::uint64")"
 check "control: the same statement with a fitting value is not" "ok" "$(STATE "SELECT '18446744073709551615'::uint64")"
 
+# Operators: one SQL function per operator, all on the same symbol (kwabi_type_binop).
+# The binding is the function's name minus its _<op> suffix.
+ops_sql=""
+for f in "eq:boolean" "ne:boolean" "lt:boolean" "le:boolean" "gt:boolean" "ge:boolean" \
+         "add:uint64" "sub:uint64" "mul:uint64" "div:uint64" "mod:uint64" "cmp:int4"; do
+  op=${f%%:*}; ret=${f##*:}
+  ops_sql+="CREATE FUNCTION uint64_$op(uint64, uint64) RETURNS $ret AS '$bundle', 'kwabi_type_binop' LANGUAGE C IMMUTABLE STRICT;"$'\n'
+done
+"$bin/psql" -X -q -h 127.0.0.1 -p $port -U postgres -d postgres -v ON_ERROR_STOP=1 <<SQL
+$ops_sql
+CREATE OPERATOR = (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_eq, COMMUTATOR = =, NEGATOR = <>);
+CREATE OPERATOR <> (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_ne, COMMUTATOR = <>, NEGATOR = =);
+CREATE OPERATOR < (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_lt, COMMUTATOR = >, NEGATOR = >=);
+CREATE OPERATOR <= (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_le, COMMUTATOR = >=, NEGATOR = >);
+CREATE OPERATOR > (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_gt, COMMUTATOR = <, NEGATOR = <=);
+CREATE OPERATOR >= (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_ge, COMMUTATOR = <=, NEGATOR = <);
+CREATE OPERATOR + (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_add, COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_sub);
+CREATE OPERATOR * (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_mul, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_div);
+CREATE OPERATOR % (LEFTARG = uint64, RIGHTARG = uint64, FUNCTION = uint64_mod);
+CREATE OPERATOR CLASS uint64_ops DEFAULT FOR TYPE uint64 USING btree AS
+  OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >,
+  FUNCTION 1 uint64_cmp(uint64, uint64);
+SQL
+
+check "eq true" "t" "$(Q "SELECT '5'::uint64 = '5'::uint64")"
+check "eq control: unequal is false" "f" "$(Q "SELECT '5'::uint64 = '6'::uint64")"
+check "ne true" "t" "$(Q "SELECT '4'::uint64 <> '5'::uint64")"
+check "ne control: equal is false" "f" "$(Q "SELECT '4'::uint64 <> '4'::uint64")"
+check "lt true" "t" "$(Q "SELECT '4'::uint64 < '5'::uint64")"
+check "lt control: reversed is false" "f" "$(Q "SELECT '5'::uint64 < '4'::uint64")"
+check "le true at equality" "t" "$(Q "SELECT '5'::uint64 <= '5'::uint64")"
+check "le control: greater is false" "f" "$(Q "SELECT '6'::uint64 <= '5'::uint64")"
+check "gt true" "t" "$(Q "SELECT '9'::uint64 > '5'::uint64")"
+check "gt control: smaller is false" "f" "$(Q "SELECT '4'::uint64 > '5'::uint64")"
+check "ge true at equality" "t" "$(Q "SELECT '4'::uint64 >= '4'::uint64")"
+check "ge control: smaller is false" "f" "$(Q "SELECT '3'::uint64 >= '4'::uint64")"
+check "max compares above 2^63" "t" "$(Q "SELECT '18446744073709551615'::uint64 > '9223372036854775807'::uint64")"
+
+check "add" "5" "$(Q "SELECT ('2'::uint64 + '3'::uint64)::text")"
+check "sub" "5" "$(Q "SELECT ('7'::uint64 - '2'::uint64)::text")"
+check "mul" "12" "$(Q "SELECT ('3'::uint64 * '4'::uint64)::text")"
+check "div truncates" "3" "$(Q "SELECT ('7'::uint64 / '2'::uint64)::text")"
+check "mod" "3" "$(Q "SELECT ('7'::uint64 % '4'::uint64)::text")"
+check "add overflow is 22003" "22003" "$(STATE "SELECT '18446744073709551615'::uint64 + '1'::uint64")"
+check "control: add at the edge is fine" "ok" "$(STATE "SELECT '18446744073709551614'::uint64 + '1'::uint64")"
+check "sub underflow is 22003" "22003" "$(STATE "SELECT '1'::uint64 - '2'::uint64")"
+check "mul overflow is 22003" "22003" "$(STATE "SELECT '4294967296'::uint64 * '4294967296'::uint64")"
+check "division by zero is 22012" "22012" "$(STATE "SELECT '7'::uint64 / '0'::uint64")"
+check "modulo by zero is 22012" "22012" "$(STATE "SELECT '7'::uint64 % '0'::uint64")"
+check "control: division by one is fine" "ok" "$(STATE "SELECT '7'::uint64 / '1'::uint64")"
+
+# Ordering through the btree opclass: the index is only usable if cmp is.
+Q "CREATE TABLE tops (v uint64)" >/dev/null
+Q "CREATE INDEX tops_v ON tops (v)" >/dev/null
+Q "INSERT INTO tops VALUES ('18446744073709551615'), ('1000'), ('7')" >/dev/null
+check "ORDER BY uses cmp: sorted" "7,1000,18446744073709551615" \
+  "$(Q "SELECT string_agg(v::text, ',' ORDER BY v) FROM tops")"
+check "a btree index serves equality" "Index" \
+  "$(Q "SET enable_seqscan = off; EXPLAIN (COSTS OFF) SELECT v FROM tops WHERE v = '1000'" | grep -o 'Index' | head -1)"
+check "control: the index returns the right row" "1000" \
+  "$(Q "SET enable_seqscan = off; SELECT v::text FROM tops WHERE v = '1000'")"
+
 check "bind uint64 to v2 (reload)" "bound" "$(Q "SELECT kwabi_hook_test_bind('uint64', '$v2')")"
 check "v2 prints with the prefix" "u42" "$(Q "SELECT '42'::uint64::text")"
 check "stored bits are unchanged: the same rows, printed by v2" "u1000|u18446744073709551615" \

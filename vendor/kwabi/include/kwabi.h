@@ -1200,12 +1200,39 @@ bool kwabi_ext_init(const KwabiV1 *api);
  * ======================================================================== */
 
 #define KWABI_TYPE_BODIES_SYMBOL "kwabi_type_bodies"
-#define KWABI_TYPE_BODIES_VERSION 1
+#define KWABI_TYPE_BODIES_VERSION 2
 
 typedef KwabiStatus (*KwabiTypeInputFn)(const char *text, uint64_t *value,
                                         KwabiError *err, void *arg);
 typedef KwabiStatus (*KwabiTypeOutputFn)(uint64_t value, char *buf, size_t buflen,
                                          KwabiError *err, void *arg);
+
+/* Operators. The runtime creates one SQL function per operator, named <name>_<op>,
+ * where <op> is one of: eq ne lt le gt ge add sub mul div mod cmp. All of them call the
+ * same C symbol, kwabi_type_binop. Comparisons return a boolean; add, sub, mul, div and
+ * mod return the type; cmp returns an int4 for btree support (-1, 0 or 1). */
+#define KWABI_TYPE_OP_EQ    0
+#define KWABI_TYPE_OP_NE    1
+#define KWABI_TYPE_OP_LT    2
+#define KWABI_TYPE_OP_LE    3
+#define KWABI_TYPE_OP_GT    4
+#define KWABI_TYPE_OP_GE    5
+#define KWABI_TYPE_OP_ADD   6
+#define KWABI_TYPE_OP_SUB   7
+#define KWABI_TYPE_OP_MUL   8
+#define KWABI_TYPE_OP_DIV   9
+#define KWABI_TYPE_OP_MOD   10
+#define KWABI_TYPE_OP_ORDER 11
+
+/* For KWABI_TYPE_OP_ORDER only: the body writes one of these into *result. */
+#define KWABI_TYPE_ORDER_LESS    0
+#define KWABI_TYPE_ORDER_EQUAL   1
+#define KWABI_TYPE_ORDER_GREATER 2
+
+/* Errors: overflow is 22003 (numeric_value_out_of_range); division or remainder by
+ * zero is 22012 (division_by_zero). A comparison cannot fail. */
+typedef KwabiStatus (*KwabiTypeBinopFn)(uint32_t op, uint64_t a, uint64_t b,
+                                        uint64_t *result, KwabiError *err, void *arg);
 
 typedef struct KwabiTypeBodies
 {
@@ -1213,6 +1240,7 @@ typedef struct KwabiTypeBodies
     uint32_t    version;           /* KWABI_TYPE_BODIES_VERSION */
     KwabiTypeInputFn input;
     KwabiTypeOutputFn output;
+    KwabiTypeBinopFn binop;        /* version 2 */
     void       *arg;
 } KwabiTypeBodies;
 

@@ -25,7 +25,24 @@ const KWABI_OK: c_int = 0;
 const KWABI_ERR_BODY_RAISED: c_int = 3;
 const KWABI_ERR_BAD_ARG: c_int = 4;
 
-const KWABI_TYPE_BODIES_VERSION: u32 = 1;
+const KWABI_TYPE_BODIES_VERSION: u32 = 2;
+
+// Operator codes, mirrored from kwabi.h.
+const OP_EQ: u32 = 0;
+const OP_NE: u32 = 1;
+const OP_LT: u32 = 2;
+const OP_LE: u32 = 3;
+const OP_GT: u32 = 4;
+const OP_GE: u32 = 5;
+const OP_ADD: u32 = 6;
+const OP_SUB: u32 = 7;
+const OP_MUL: u32 = 8;
+const OP_DIV: u32 = 9;
+const OP_MOD: u32 = 10;
+const OP_ORDER: u32 = 11;
+const ORDER_LESS: u64 = 0;
+const ORDER_EQUAL: u64 = 1;
+const ORDER_GREATER: u64 = 2;
 
 // PostgreSQL SQLSTATE encoding (utils/elog.h).
 const fn six(ch: u8) -> i32 {
@@ -36,6 +53,7 @@ const fn sqlstate(c: &[u8; 5]) -> i32 {
 }
 const SQLSTATE_INVALID_TEXT: i32 = sqlstate(b"22P02");
 const SQLSTATE_OUT_OF_RANGE: i32 = sqlstate(b"22003");
+const SQLSTATE_DIVISION_BY_ZERO: i32 = sqlstate(b"22012");
 
 const PREFIX: &str = match option_env!("KWABI_CANARY_PREFIX") {
     Some(p) => p,
@@ -66,6 +84,7 @@ pub struct KwabiTypeBodies {
     pub input: unsafe extern "C" fn(*const c_char, *mut u64, *mut KwabiError, *mut c_void) -> c_int,
     pub output:
         unsafe extern "C" fn(u64, *mut c_char, usize, *mut KwabiError, *mut c_void) -> c_int,
+    pub binop: unsafe extern "C" fn(u32, u64, u64, *mut u64, *mut KwabiError, *mut c_void) -> c_int,
     pub arg: *mut c_void,
 }
 
@@ -147,11 +166,69 @@ unsafe extern "C" fn uint_output(
         .unwrap_or(KWABI_ERR_BODY_RAISED)
 }
 
+/// One operator. Comparisons are 0 or 1; `cmp` is an ordering code; arithmetic is the
+/// result. Overflow and division by zero come back as errors, not wrapped values.
+fn operator(op: u32, a: u64, b: u64) -> Result<u64, (i32, &'static str)> {
+    let (x, y) = (UInt64::new(a), UInt64::new(b));
+    let arith = |r: Result<UInt64, UIntError>| -> Result<u64, (i32, &'static str)> {
+        r.map(UInt64::get).map_err(|e| match e {
+            UIntError::DivideByZero => (SQLSTATE_DIVISION_BY_ZERO, "division by zero"),
+            _ => (SQLSTATE_OUT_OF_RANGE, "value out of range for type uint64"),
+        })
+    };
+    Ok(match op {
+        OP_EQ => (a == b) as u64,
+        OP_NE => (a != b) as u64,
+        OP_LT => (a < b) as u64,
+        OP_LE => (a <= b) as u64,
+        OP_GT => (a > b) as u64,
+        OP_GE => (a >= b) as u64,
+        OP_ADD => return arith(x.checked_add(y)),
+        OP_SUB => return arith(x.checked_sub(y)),
+        OP_MUL => return arith(x.checked_mul(y)),
+        OP_DIV => return arith(x.checked_div(y)),
+        OP_MOD => return arith(x.checked_rem(y)),
+        OP_ORDER => match a.cmp(&b) {
+            std::cmp::Ordering::Less => ORDER_LESS,
+            std::cmp::Ordering::Equal => ORDER_EQUAL,
+            std::cmp::Ordering::Greater => ORDER_GREATER,
+        },
+        _ => return Err((SQLSTATE_INVALID_TEXT, "unknown operator")),
+    })
+}
+
+unsafe fn binop_body(op: u32, a: u64, b: u64, result: *mut u64, err: *mut KwabiError) -> c_int {
+    match operator(op, a, b) {
+        Ok(v) => {
+            *result = v;
+            KWABI_OK
+        }
+        Err((code, msg)) => {
+            fill_error(&mut *err, code, KWABI_ERR_BODY_RAISED, msg);
+            KWABI_ERR_BODY_RAISED
+        }
+    }
+}
+
+/// Operators. Same containment as I/O.
+unsafe extern "C" fn uint_binop(
+    op: u32,
+    a: u64,
+    b: u64,
+    result: *mut u64,
+    err: *mut KwabiError,
+    _arg: *mut c_void,
+) -> c_int {
+    catch_unwind(AssertUnwindSafe(|| binop_body(op, a, b, result, err)))
+        .unwrap_or(KWABI_ERR_BODY_RAISED)
+}
+
 static TYPE_BODIES: KwabiTypeBodies = KwabiTypeBodies {
     size: std::mem::size_of::<KwabiTypeBodies>() as u32,
     version: KWABI_TYPE_BODIES_VERSION,
     input: uint_input,
     output: uint_output,
+    binop: uint_binop,
     arg: std::ptr::null_mut(),
 };
 
