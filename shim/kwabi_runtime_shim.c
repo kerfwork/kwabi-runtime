@@ -318,6 +318,7 @@ _PG_init(void)
      * the capability bit can stay honest.
      */
     (void) shim_slru_install_hooks();
+    shim_hook_install_reload();
 
     /*
      * The catching direction is shim-owned for the same reason: it needs
@@ -481,6 +482,10 @@ shim_capabilities(void)
      * every link runs in registration order and reports its error to the statement.
      */
     caps |= KWABI_CAP_HOOKS;
+
+    /* HOOK_RELOAD needs the name table, which exists only when preloaded. */
+    if (shim_hook_reload_available())
+        caps |= KWABI_CAP_HOOK_RELOAD;
 
     return caps;
 }

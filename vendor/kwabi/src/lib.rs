@@ -484,6 +484,8 @@ pub struct KwabiV1 {
             *mut guarded::KwabiErrorAbi,
         ) -> i32,
     >,
+    pub hook_bind_extension:
+        Option<unsafe extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char) -> i32>,
 }
 
 pub type KwabiExecutorCheckPermsBodyFn = unsafe extern "C" fn(

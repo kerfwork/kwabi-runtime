@@ -61,10 +61,10 @@ SELECT kwabi_proof() LIKE '%genuine PostgreSQL memory%'
 \echo '=== 3. bits NOT claimed must be genuinely absent ==='
 \echo '   (a runtime returning all-ones passes section 2 and FAILS here)'
 
--- Only seven bits are defined (0-6: CORE .. SLRU, HOOKS). Nothing at or above bit 7
--- may be set: a runtime that sets one is claiming a capability this header does not
--- define, and an extension cannot reason about it.
-SELECT ((kwabi_capabilities() & ~127::bigint) = 0) AS no_undefined_bits;
+-- Only eight bits are defined (0-7: CORE .. SLRU, HOOKS, HOOK_RELOAD). Nothing at or
+-- above bit 8 may be set: a runtime that sets one is claiming a capability this header
+-- does not define, and an extension cannot reason about it.
+SELECT ((kwabi_capabilities() & ~255::bigint) = 0) AS no_undefined_bits;
 
 -- ATOMIC_BODY is the bit most likely to be over-claimed, because it is an
 -- empirical promise rather than a structural one. It must be absent on a

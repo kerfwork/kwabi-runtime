@@ -1090,6 +1090,25 @@ for M in "${MAJORS[@]}"; do
         echo "      see $OUT"
     fi
 
+    # --- hook-reload: reloadable hook bodies, preloaded cluster -----------
+    #
+    # The reload needs the name table in shared memory, so this stage runs its own
+    # cluster with the bundle preloaded. Session B is a backend that is already running
+    # when the body is bound; it must switch on its next statement.
+    echo "  [hook-reload] reloadable hook bodies against a preloaded cluster"
+    OUT=/tmp/kwabi_hookreload_$M.log
+    HR_SCRATCH="${TMPDIR:-/tmp}/kwabi-hookreload-pg$M"
+    mkdir -p "$HR_SCRATCH"
+    if PGBIN="$PGB" DLSUFFIX="$DLSUFFIX" SCRATCH="$HR_SCRATCH" HR_PORT=$((5480 + M % 100)) \
+        ./hook-reload-run.sh "$M" >"$OUT" 2>&1 \
+       && grep -q "hook reload checks passed" "$OUT"; then
+        HR_PASS=$(grep -c "  PASS " "$OUT")
+        record PASS "$M" "hook-reload green ($HR_PASS checks)"
+    else
+        record FAIL "$M" "hook-reload: see $OUT"
+        grep -E "FAIL" "$OUT" | head -5 | sed 's/^/      /'
+    fi
+
     # --- executor-api: executor slots through the ABI ----------------------
     #
     # The executor group: start, run, getnext, finish, end. The assertion that

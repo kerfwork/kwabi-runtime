@@ -224,9 +224,10 @@ fn table_layout_is_stable() {
     // 206 -> 214 when the executor hook slots were appended (4 register, 4 next).
     // 214 -> 218 when the permission-check and planner hook slots were appended.
     // 218 -> 220 when the utility hook slots were appended.
+    // 220 -> 221 when hook_bind_extension was appended (reloadable bodies).
     assert_eq!(
         KwabiV1::FIELD_COUNT,
-        220,
+        221,
         "field count changed — kwabi.h edited?"
     );
 }

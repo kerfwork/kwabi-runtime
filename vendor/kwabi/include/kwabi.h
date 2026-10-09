@@ -108,11 +108,18 @@ extern "C" {
  * another, which would be wired and still wrong. */
 #define KWABI_CAP_HOOKS                    (1ULL << 6)
 
+/* HOOK_RELOAD: an extension's hook bodies can be replaced in a running backend
+ * with hook_bind_extension, without a server restart. It holds only when the runtime
+ * is preloaded (shared memory exists), so it is not derivable from the slot. A
+ * replaced body runs from its new library image; statics in the old image are not
+ * carried over, and a new image needs a new file name. */
+#define KWABI_CAP_HOOK_RELOAD              (1ULL << 7)
+
 /* Every defined bit, for a runtime that supports the lot. */
 #define KWABI_CAP_ALL \
     (KWABI_CAP_CORE | KWABI_CAP_STRUCTURED_ERRORS | KWABI_CAP_ERROR_FIREWALL | \
      KWABI_CAP_MEMORY_INTROSPECTION | KWABI_CAP_ATOMIC_BODY | KWABI_CAP_SLRU | \
-     KWABI_CAP_HOOKS)
+     KWABI_CAP_HOOKS | KWABI_CAP_HOOK_RELOAD)
 #define KWABI_VERSION KWABI_VERSION_1
 
 /* PostgreSQL version numbers (from pg_config.h) */
@@ -1148,6 +1155,13 @@ typedef struct KwabiV1 {
                                              KwabiDestReceiver dest,
                                              KwabiQueryCompletion qc, KwabiError *err);
 
+    /* ---- Reloadable bodies (appended, still v1) ----
+     * Publish a library for a named extension. The first bind creates the name; a
+     * later bind with the same name replaces its library in every backend. Returns
+     * KWABI_ERR_BAD_ARG for a NULL or over-long argument, a name table that is
+     * full, or a runtime that is not preloaded (see KWABI_CAP_HOOK_RELOAD). */
+    KwabiStatus (*hook_bind_extension)(const char *name, const char *path);
+
 } KwabiV1;
 
 /* ========================================================================
@@ -1160,6 +1174,37 @@ typedef struct KwabiV1 {
  * ======================================================================== */
 
 bool kwabi_ext_init(const KwabiV1 *api);
+
+/* ========================================================================
+ * Reloadable hook bodies (appended, still v1)
+ *
+ * An extension that wants its hook bodies reloadable exports
+ *
+ *     const KwabiHookBodies *kwabi_hook_bodies(void);
+ *
+ * and is loaded by hook_bind_extension(name, path). The runtime dlopens the path
+ * in each backend on that backend's next hook call after a bind, calls
+ * kwabi_ext_init with the table if the library exports it, and installs the bodies.
+ * A NULL field means the library does not hook that point. The table is read once
+ * per load and must not change for the life of that library image.
+ * ======================================================================== */
+
+#define KWABI_HOOK_BODIES_SYMBOL "kwabi_hook_bodies"
+#define KWABI_HOOK_BODIES_VERSION 1
+
+typedef struct KwabiHookBodies
+{
+    uint32_t    size;              /* sizeof(KwabiHookBodies) as the library compiled it */
+    uint32_t    version;           /* KWABI_HOOK_BODIES_VERSION */
+    KwabiExecutorStartBody start;
+    KwabiExecutorRunBody run;
+    KwabiExecutorFinishBody finish;
+    KwabiExecutorEndBody end;
+    KwabiExecutorCheckPermsBody check_perms;
+    KwabiPlannerBody planner;
+    KwabiProcessUtilityBody utility;
+    void       *arg;
+} KwabiHookBodies;
 
 /* ========================================================================
  * Convenience macros

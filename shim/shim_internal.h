@@ -155,6 +155,8 @@ extern void init_group_explain(void);
 extern void init_group_transaction(void);
 extern void init_group_executor(void);
 extern void init_group_hook(void);
+extern void shim_hook_install_reload(void);
+extern bool shim_hook_reload_available(void);
 extern void init_group_bgworker(void);
 extern void init_group_slru(void);
 

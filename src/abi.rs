@@ -21,13 +21,15 @@ pub const KWABI_CAP_MEMORY_INTROSPECTION: u64 = 1 << 3;
 pub const KWABI_CAP_ATOMIC_BODY: u64 = 1 << 4;
 pub const KWABI_CAP_SLRU: u64 = 1 << 5;
 pub const KWABI_CAP_HOOKS: u64 = 1 << 6;
+pub const KWABI_CAP_HOOK_RELOAD: u64 = 1 << 7;
 pub const KWABI_CAP_ALL: u64 = KWABI_CAP_CORE
     | KWABI_CAP_STRUCTURED_ERRORS
     | KWABI_CAP_ERROR_FIREWALL
     | KWABI_CAP_MEMORY_INTROSPECTION
     | KWABI_CAP_ATOMIC_BODY
     | KWABI_CAP_SLRU
-    | KWABI_CAP_HOOKS;
+    | KWABI_CAP_HOOKS
+    | KWABI_CAP_HOOK_RELOAD;
 
 /// Stable ABI version published by this runtime.
 pub const KWABI_VERSION: u32 = 1;
@@ -476,11 +478,12 @@ pub struct KwabiV1 {
             *mut KwabiError,
         ) -> c_int,
     >,
+    pub hook_bind_extension: Option<unsafe extern "C" fn(*const c_char, *const c_char) -> c_int>,
 }
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 220;
+    pub const FIELD_COUNT: usize = 221;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -710,6 +713,7 @@ impl Default for KwabiV1 {
             hook_next_planner: None,
             hook_register_process_utility: None,
             hook_next_process_utility: None,
+            hook_bind_extension: None,
         }
     }
 }

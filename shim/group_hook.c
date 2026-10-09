@@ -20,6 +20,11 @@
 #include "executor/executor.h"
 #include "optimizer/planner.h"
 #include "tcop/utility.h"
+#include "storage/ipc.h"
+#include "storage/shmem.h"
+#include "storage/spin.h"
+#include <dlfcn.h>
+#include <string.h>
 #include "utils/builtins.h"
 
 #define KWABI_HOOK_MAX_BODIES 8
@@ -50,9 +55,26 @@ typedef struct HookLink
     bool        once;               /* ExecutorRun's execute_once, forwarded unchanged */
 } HookLink;
 
-static HookBody bodies[HOOK_NPOINTS][KWABI_HOOK_MAX_BODIES];
-static int  nbodies[HOOK_NPOINTS];
+/* Positions 0 .. KWABI_HOOK_NAMED_MAX-1 hold reloadable bodies, one per bound name, in
+ * bind order. Unnamed registrations follow them. A chain runs the populated
+ * positions in order and skips the empty ones. */
+#define KWABI_HOOK_NAMED_MAX 8
+#define KWABI_HOOK_NAME_MAX  64
+
+static HookBody bodies[HOOK_NPOINTS][KWABI_HOOK_NAMED_MAX + KWABI_HOOK_MAX_BODIES];
+static int  nbodies[HOOK_NPOINTS];      /* one past the last used position */
 static bool installed[HOOK_NPOINTS];
+static void install_point(HookPoint point);
+
+/* The next populated position at or after `from`, or -1. */
+static int
+next_present(HookPoint p, int from)
+{
+    for (int i = from; i < nbodies[p]; i++)
+        if (bodies[p][i].fn != NULL)
+            return i;
+    return -1;
+}
 
 /* The hook each point had before we installed ours. Null means none. */
 static ExecutorStart_hook_type prev_start = NULL;
@@ -342,13 +364,16 @@ utility_link(PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
 static KwabiStatus
 chain_start(int index, QueryDesc *qd, int eflags, KwabiError *err)
 {
-    if (index < nbodies[HOOK_START])
     {
-        HookLink    link = {index, false};
-        HookBody   *b = &bodies[HOOK_START][index];
+        int         j = next_present(HOOK_START, index);
+        if (j >= 0)
+        {
+            HookLink    link = {j, false};
+            HookBody   *b = &bodies[HOOK_START][j];
 
-        return ((KwabiExecutorStartBody) b->fn)((KwabiQueryDesc) qd, eflags,
-                                                (KwabiHookNext) &link, err, b->arg);
+            return ((KwabiExecutorStartBody) b->fn)((KwabiQueryDesc) qd, eflags,
+                                                    (KwabiHookNext) &link, err, b->arg);
+        }
     }
     return standard_start(qd, eflags, err);
 }
@@ -356,13 +381,16 @@ chain_start(int index, QueryDesc *qd, int eflags, KwabiError *err)
 static KwabiStatus
 chain_run(int index, QueryDesc *qd, int direction, uint64_t count, bool once, KwabiError *err)
 {
-    if (index < nbodies[HOOK_RUN])
     {
-        HookLink    link = {index, once};
-        HookBody   *b = &bodies[HOOK_RUN][index];
+        int         j = next_present(HOOK_RUN, index);
+        if (j >= 0)
+        {
+            HookLink    link = {j, once};
+            HookBody   *b = &bodies[HOOK_RUN][j];
 
-        return ((KwabiExecutorRunBody) b->fn)((KwabiQueryDesc) qd, direction, count,
-                                              (KwabiHookNext) &link, err, b->arg);
+            return ((KwabiExecutorRunBody) b->fn)((KwabiQueryDesc) qd, direction, count,
+                                                  (KwabiHookNext) &link, err, b->arg);
+        }
     }
     return standard_run(qd, direction, count, once, err);
 }
@@ -370,13 +398,16 @@ chain_run(int index, QueryDesc *qd, int direction, uint64_t count, bool once, Kw
 static KwabiStatus
 chain_finish(int index, QueryDesc *qd, KwabiError *err)
 {
-    if (index < nbodies[HOOK_FINISH])
     {
-        HookLink    link = {index, false};
-        HookBody   *b = &bodies[HOOK_FINISH][index];
+        int         j = next_present(HOOK_FINISH, index);
+        if (j >= 0)
+        {
+            HookLink    link = {j, false};
+            HookBody   *b = &bodies[HOOK_FINISH][j];
 
-        return ((KwabiExecutorFinishBody) b->fn)((KwabiQueryDesc) qd,
-                                                 (KwabiHookNext) &link, err, b->arg);
+            return ((KwabiExecutorFinishBody) b->fn)((KwabiQueryDesc) qd,
+                                                     (KwabiHookNext) &link, err, b->arg);
+        }
     }
     return standard_finish(qd, err);
 }
@@ -384,13 +415,16 @@ chain_finish(int index, QueryDesc *qd, KwabiError *err)
 static KwabiStatus
 chain_end(int index, QueryDesc *qd, KwabiError *err)
 {
-    if (index < nbodies[HOOK_END])
     {
-        HookLink    link = {index, false};
-        HookBody   *b = &bodies[HOOK_END][index];
+        int         j = next_present(HOOK_END, index);
+        if (j >= 0)
+        {
+            HookLink    link = {j, false};
+            HookBody   *b = &bodies[HOOK_END][j];
 
-        return ((KwabiExecutorEndBody) b->fn)((KwabiQueryDesc) qd,
-                                              (KwabiHookNext) &link, err, b->arg);
+            return ((KwabiExecutorEndBody) b->fn)((KwabiQueryDesc) qd,
+                                                  (KwabiHookNext) &link, err, b->arg);
+        }
     }
     return standard_end(qd, err);
 }
@@ -399,16 +433,19 @@ static KwabiStatus
 chain_check_perms(int index, List *rangeTable, List *rtePermInfos,
                   bool ereport_on_violation, int *allowed, KwabiError *err)
 {
-    if (index < nbodies[HOOK_CHECK_PERMS])
     {
-        HookLink    link = {index, false};
-        HookBody   *b = &bodies[HOOK_CHECK_PERMS][index];
+        int         j = next_present(HOOK_CHECK_PERMS, index);
+        if (j >= 0)
+        {
+            HookLink    link = {j, false};
+            HookBody   *b = &bodies[HOOK_CHECK_PERMS][j];
 
-        return ((KwabiExecutorCheckPermsBody) b->fn)((KwabiList) rangeTable,
-                                                     (KwabiList) rtePermInfos,
-                                                     ereport_on_violation,
-                                                     (KwabiHookNext) &link,
-                                                     allowed, err, b->arg);
+            return ((KwabiExecutorCheckPermsBody) b->fn)((KwabiList) rangeTable,
+                                                         (KwabiList) rtePermInfos,
+                                                         ereport_on_violation,
+                                                         (KwabiHookNext) &link,
+                                                         allowed, err, b->arg);
+        }
     }
     return standard_check_perms(rangeTable, rtePermInfos, ereport_on_violation, allowed, err);
 }
@@ -417,15 +454,18 @@ static KwabiStatus
 chain_planner(int index, Query *parse, const char *query_string, int cursorOptions,
               ParamListInfo boundParams, PlannedStmt **planned, KwabiError *err)
 {
-    if (index < nbodies[HOOK_PLANNER])
     {
-        HookLink    link = {index, false};
-        HookBody   *b = &bodies[HOOK_PLANNER][index];
+        int         j = next_present(HOOK_PLANNER, index);
+        if (j >= 0)
+        {
+            HookLink    link = {j, false};
+            HookBody   *b = &bodies[HOOK_PLANNER][j];
 
-        return ((KwabiPlannerBody) b->fn)((KwabiNode) parse, query_string, cursorOptions,
-                                          (KwabiParamListInfo) boundParams,
-                                          (KwabiHookNext) &link,
-                                          (KwabiNode *) planned, err, b->arg);
+            return ((KwabiPlannerBody) b->fn)((KwabiNode) parse, query_string, cursorOptions,
+                                              (KwabiParamListInfo) boundParams,
+                                              (KwabiHookNext) &link,
+                                              (KwabiNode *) planned, err, b->arg);
+        }
     }
     return planner_link(parse, query_string, cursorOptions, boundParams, planned, err);
 }
@@ -436,21 +476,234 @@ chain_utility(int index, PlannedStmt *pstmt, const char *queryString, bool readO
               QueryEnvironment *queryEnv, DestReceiver *dest, QueryCompletion *qc,
               KwabiError *err)
 {
-    if (index < nbodies[HOOK_UTILITY])
     {
-        HookLink    link = {index, false};
-        HookBody   *b = &bodies[HOOK_UTILITY][index];
+        int         j = next_present(HOOK_UTILITY, index);
+        if (j >= 0)
+        {
+            HookLink    link = {j, false};
+            HookBody   *b = &bodies[HOOK_UTILITY][j];
 
-        return ((KwabiProcessUtilityBody) b->fn)((KwabiNode) pstmt, queryString,
-                                                 readOnlyTree ? 1 : 0, (int) context,
-                                                 (KwabiParamListInfo) params,
-                                                 (KwabiQueryEnvironment) queryEnv,
-                                                 (KwabiDestReceiver) dest,
-                                                 (KwabiQueryCompletion) qc,
-                                                 (KwabiHookNext) &link, err, b->arg);
+            return ((KwabiProcessUtilityBody) b->fn)((KwabiNode) pstmt, queryString,
+                                                     readOnlyTree ? 1 : 0, (int) context,
+                                                     (KwabiParamListInfo) params,
+                                                     (KwabiQueryEnvironment) queryEnv,
+                                                     (KwabiDestReceiver) dest,
+                                                     (KwabiQueryCompletion) qc,
+                                                     (KwabiHookNext) &link, err, b->arg);
+        }
     }
     return utility_link(pstmt, queryString, readOnlyTree, context, params,
                         queryEnv, dest, qc, err);
+}
+
+/* ========================================================================
+ * Reloadable bodies. The name table lives in shared memory, so a bind is seen by
+ * every backend. Each backend keeps its own handles and loads a library the first
+ * time it sees a new generation for a name. Old handles are never closed, so a call
+ * already running keeps its code. See notes/hook-registry-design.md section 4.
+ * ======================================================================== */
+
+typedef struct NamedEntry
+{
+    char        name[KWABI_HOOK_NAME_MAX];
+    char        path[MAXPGPATH];
+    uint64      generation;
+} NamedEntry;
+
+typedef struct NamedShm
+{
+    slock_t     mutex;
+    int         nentries;
+    NamedEntry  e[KWABI_HOOK_NAMED_MAX];
+} NamedShm;
+
+static NamedShm *named_shm = NULL;
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
+static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+
+/* Per backend. */
+static uint64 named_seen[KWABI_HOOK_NAMED_MAX];
+static void *named_handle[KWABI_HOOK_NAMED_MAX];
+
+static void
+clear_named_position(int i)
+{
+    for (int p = 0; p < HOOK_NPOINTS; p++)
+    {
+        bodies[p][i].fn = NULL;
+        bodies[p][i].arg = NULL;
+    }
+}
+
+/* Load the library for one name into its positions. A failure leaves the previous
+ * bodies in place, and the failure is reported as a warning. */
+static void
+load_named(int i, const char *path)
+{
+    void       *h;
+    KwabiHookBodies *(*getter) (void);
+    bool        (*ext_init) (const KwabiV1 *);
+    const KwabiHookBodies *t;
+
+    h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (h == NULL)
+    {
+        ereport(WARNING, (errmsg("kwabi hook bind: %s", dlerror())));
+        return;
+    }
+    getter = (KwabiHookBodies *(*) (void)) dlsym(h, KWABI_HOOK_BODIES_SYMBOL);
+    if (getter == NULL)
+    {
+        ereport(WARNING, (errmsg("kwabi hook bind: %s exports no %s",
+                                 path, KWABI_HOOK_BODIES_SYMBOL)));
+        return;
+    }
+    t = getter();
+    if (t == NULL || t->size != sizeof(KwabiHookBodies) ||
+        t->version != KWABI_HOOK_BODIES_VERSION)
+    {
+        ereport(WARNING, (errmsg("kwabi hook bind: %s has an incompatible body table", path)));
+        return;
+    }
+    ext_init = (bool (*) (const KwabiV1 *)) dlsym(h, "kwabi_ext_init");
+    if (ext_init != NULL && !ext_init(shim_api))
+    {
+        ereport(WARNING, (errmsg("kwabi hook bind: %s kwabi_ext_init failed", path)));
+        return;
+    }
+
+    clear_named_position(i);
+    named_handle[i] = h;
+    bodies[HOOK_START][i].fn = (void *) t->start;
+    bodies[HOOK_RUN][i].fn = (void *) t->run;
+    bodies[HOOK_FINISH][i].fn = (void *) t->finish;
+    bodies[HOOK_END][i].fn = (void *) t->end;
+    bodies[HOOK_CHECK_PERMS][i].fn = (void *) t->check_perms;
+    bodies[HOOK_PLANNER][i].fn = (void *) t->planner;
+    bodies[HOOK_UTILITY][i].fn = (void *) t->utility;
+    for (int p = 0; p < HOOK_NPOINTS; p++)
+    {
+        bodies[p][i].arg = t->arg;
+        if (bodies[p][i].fn != NULL)
+            install_point((HookPoint) p);
+    }
+}
+
+/* Bring this backend up to date with the name table. Called on every hook entry. */
+static void
+sync_named(void)
+{
+    uint64      gens[KWABI_HOOK_NAMED_MAX];
+    int         n;
+
+    if (named_shm == NULL)
+        return;
+
+    SpinLockAcquire(&named_shm->mutex);
+    n = named_shm->nentries;
+    for (int i = 0; i < n; i++)
+        gens[i] = named_shm->e[i].generation;
+    SpinLockRelease(&named_shm->mutex);
+
+    for (int i = 0; i < n; i++)
+    {
+        char        path[MAXPGPATH];
+
+        if (gens[i] == named_seen[i])
+            continue;
+        named_seen[i] = gens[i];
+
+        SpinLockAcquire(&named_shm->mutex);
+        strlcpy(path, named_shm->e[i].path, sizeof(path));
+        SpinLockRelease(&named_shm->mutex);
+
+        load_named(i, path);
+    }
+}
+
+static KwabiStatus
+shim_hook_bind_extension(const char *name, const char *path)
+{
+    int         i;
+
+    if (named_shm == NULL || name == NULL || path == NULL ||
+        name[0] == '\0' || strlen(name) >= KWABI_HOOK_NAME_MAX ||
+        strlen(path) >= MAXPGPATH)
+        return KWABI_ERR_BAD_ARG;
+
+    SpinLockAcquire(&named_shm->mutex);
+    for (i = 0; i < named_shm->nentries; i++)
+        if (strcmp(named_shm->e[i].name, name) == 0)
+            break;
+    if (i == named_shm->nentries)
+    {
+        if (named_shm->nentries >= KWABI_HOOK_NAMED_MAX)
+        {
+            SpinLockRelease(&named_shm->mutex);
+            return KWABI_ERR_BAD_ARG;
+        }
+        strlcpy(named_shm->e[i].name, name, KWABI_HOOK_NAME_MAX);
+        named_shm->e[i].generation = 0;
+        named_shm->nentries++;
+    }
+    strlcpy(named_shm->e[i].path, path, MAXPGPATH);
+    named_shm->e[i].generation++;
+    SpinLockRelease(&named_shm->mutex);
+
+    return KWABI_OK;
+}
+
+/* ---- Preload: the name table needs shared memory, reserved before fork. ---- */
+
+static void
+kwabi_hook_shmem_request(void)
+{
+    if (prev_shmem_request_hook)
+        prev_shmem_request_hook();
+    RequestAddinShmemSpace(MAXALIGN(sizeof(NamedShm)));
+}
+
+static void
+kwabi_hook_shmem_startup(void)
+{
+    bool        found;
+
+    if (prev_shmem_startup_hook)
+        prev_shmem_startup_hook();
+    named_shm = ShmemInitStruct("kwabi_hook_named", sizeof(NamedShm), &found);
+    if (!found)
+    {
+        SpinLockInit(&named_shm->mutex);
+        named_shm->nentries = 0;
+    }
+}
+
+/* Called from _PG_init. Only a preloaded runtime gets the table; a plain LOAD leaves
+ * named_shm NULL and the reload capability bit clear. */
+void
+shim_hook_install_reload(void)
+{
+    if (!process_shared_preload_libraries_in_progress)
+        return;
+    prev_shmem_request_hook = shmem_request_hook;
+    shmem_request_hook = kwabi_hook_shmem_request;
+    prev_shmem_startup_hook = shmem_startup_hook;
+    shmem_startup_hook = kwabi_hook_shmem_startup;
+
+    /*
+     * Every point's trampoline is installed now, not when a body arrives. A backend
+     * that never registered a body would otherwise never run the sync, and so would
+     * never see a bind made by another backend. With no body in a position the chain
+     * is just the standard function, so an idle point costs one sync per call.
+     */
+    for (int p = 0; p < HOOK_NPOINTS; p++)
+        install_point((HookPoint) p);
+}
+
+bool
+shim_hook_reload_available(void)
+{
+    return named_shm != NULL;
 }
 
 /* ========================================================================
@@ -461,6 +714,7 @@ chain_utility(int index, PlannedStmt *pstmt, const char *queryString, bool readO
 static void
 trampoline_start(QueryDesc *qd, int eflags)
 {
+    sync_named();
     KwabiError  err;
 
     kwabi_error_init(&err);
@@ -472,6 +726,7 @@ trampoline_start(QueryDesc *qd, int eflags)
 static void
 trampoline_run(QueryDesc *qd, ScanDirection direction, uint64 count)
 {
+    sync_named();
     KwabiError  err;
 
     kwabi_error_init(&err);
@@ -482,6 +737,7 @@ trampoline_run(QueryDesc *qd, ScanDirection direction, uint64 count)
 static void
 trampoline_run(QueryDesc *qd, ScanDirection direction, uint64 count, bool execute_once)
 {
+    sync_named();
     KwabiError  err;
 
     kwabi_error_init(&err);
@@ -493,6 +749,7 @@ trampoline_run(QueryDesc *qd, ScanDirection direction, uint64 count, bool execut
 static void
 trampoline_finish(QueryDesc *qd)
 {
+    sync_named();
     KwabiError  err;
 
     kwabi_error_init(&err);
@@ -503,6 +760,7 @@ trampoline_finish(QueryDesc *qd)
 static void
 trampoline_end(QueryDesc *qd)
 {
+    sync_named();
     KwabiError  err;
 
     kwabi_error_init(&err);
@@ -515,6 +773,7 @@ trampoline_utility(PlannedStmt *pstmt, const char *queryString, bool readOnlyTre
                    ProcessUtilityContext context, ParamListInfo params,
                    QueryEnvironment *queryEnv, DestReceiver *dest, QueryCompletion *qc)
 {
+    sync_named();
     KwabiError  err;
 
     kwabi_error_init(&err);
@@ -526,6 +785,7 @@ trampoline_utility(PlannedStmt *pstmt, const char *queryString, bool readOnlyTre
 static bool
 trampoline_check_perms(List *rangeTable, List *rtePermInfos, bool ereport_on_violation)
 {
+    sync_named();
     KwabiError  err;
     int         allowed = 1;
 
@@ -550,6 +810,7 @@ static PlannedStmt *
 trampoline_planner(Query *parse, const char *query_string, int cursorOptions,
                    ParamListInfo boundParams)
 {
+    sync_named();
     KwabiError  err;
     PlannedStmt *planned = NULL;
 
@@ -568,53 +829,59 @@ trampoline_planner(Query *parse, const char *query_string, int cursorOptions,
  * hook that was there before, which the standard link calls.
  * ======================================================================== */
 
+/* Install this point's trampoline once, saving the hook that was there before. */
+static void
+install_point(HookPoint point)
+{
+    if (installed[point])
+        return;
+    switch (point)
+    {
+        case HOOK_START:
+            prev_start = ExecutorStart_hook;
+            ExecutorStart_hook = trampoline_start;
+            break;
+        case HOOK_RUN:
+            prev_run = ExecutorRun_hook;
+            ExecutorRun_hook = trampoline_run;
+            break;
+        case HOOK_FINISH:
+            prev_finish = ExecutorFinish_hook;
+            ExecutorFinish_hook = trampoline_finish;
+            break;
+        case HOOK_END:
+            prev_end = ExecutorEnd_hook;
+            ExecutorEnd_hook = trampoline_end;
+            break;
+        case HOOK_CHECK_PERMS:
+            prev_check_perms = ExecutorCheckPerms_hook;
+            ExecutorCheckPerms_hook = trampoline_check_perms;
+            break;
+        case HOOK_PLANNER:
+            prev_planner = planner_hook;
+            planner_hook = trampoline_planner;
+            break;
+        case HOOK_UTILITY:
+            prev_utility = ProcessUtility_hook;
+            ProcessUtility_hook = trampoline_utility;
+            break;
+        default:
+            break;
+    }
+    installed[point] = true;
+}
+
 static KwabiStatus
 register_body(HookPoint point, void *fn, void *arg)
 {
-    if (fn == NULL || nbodies[point] >= KWABI_HOOK_MAX_BODIES)
+    if (fn == NULL || nbodies[point] >= KWABI_HOOK_NAMED_MAX + KWABI_HOOK_MAX_BODIES)
         return KWABI_ERR_BAD_ARG;
 
     bodies[point][nbodies[point]].fn = fn;
     bodies[point][nbodies[point]].arg = arg;
     nbodies[point]++;
 
-    if (!installed[point])
-    {
-        switch (point)
-        {
-            case HOOK_START:
-                prev_start = ExecutorStart_hook;
-                ExecutorStart_hook = trampoline_start;
-                break;
-            case HOOK_RUN:
-                prev_run = ExecutorRun_hook;
-                ExecutorRun_hook = trampoline_run;
-                break;
-            case HOOK_FINISH:
-                prev_finish = ExecutorFinish_hook;
-                ExecutorFinish_hook = trampoline_finish;
-                break;
-            case HOOK_END:
-                prev_end = ExecutorEnd_hook;
-                ExecutorEnd_hook = trampoline_end;
-                break;
-            case HOOK_CHECK_PERMS:
-                prev_check_perms = ExecutorCheckPerms_hook;
-                ExecutorCheckPerms_hook = trampoline_check_perms;
-                break;
-            case HOOK_PLANNER:
-                prev_planner = planner_hook;
-                planner_hook = trampoline_planner;
-                break;
-            case HOOK_UTILITY:
-                prev_utility = ProcessUtility_hook;
-                ProcessUtility_hook = trampoline_utility;
-                break;
-            default:
-                break;
-        }
-        installed[point] = true;
-    }
+    install_point(point);
     return KWABI_OK;
 }
 
@@ -761,6 +1028,10 @@ shim_hook_next_process_utility(KwabiHookNext next, KwabiNode pstmt, const char *
 void
 init_group_hook(void)
 {
+    /* Unnamed registrations start after the named positions. */
+    for (int p = 0; p < HOOK_NPOINTS; p++)
+        nbodies[p] = KWABI_HOOK_NAMED_MAX;
+    shim_table.hook_bind_extension = shim_hook_bind_extension;
     shim_table.hook_register_process_utility = shim_hook_register_process_utility;
     shim_table.hook_next_process_utility     = shim_hook_next_process_utility;
     shim_table.hook_register_executor_check_perms = shim_hook_register_executor_check_perms;
@@ -1001,4 +1272,14 @@ kwabi_hook_test_deny_utility(PG_FUNCTION_ARGS)
 {
     test_utility_deny = PG_GETARG_BOOL(0);
     PG_RETURN_BOOL(test_utility_deny);
+}
+
+/* Test entry point: bind a name to a library, as an extension would. */
+PG_FUNCTION_INFO_V1(kwabi_hook_test_bind);
+Datum
+kwabi_hook_test_bind(PG_FUNCTION_ARGS)
+{
+    KwabiStatus st = shim_api->hook_bind_extension(text_to_cstring(PG_GETARG_TEXT_PP(0)),
+                                                   text_to_cstring(PG_GETARG_TEXT_PP(1)));
+    PG_RETURN_TEXT_P(cstring_to_text(st == KWABI_OK ? "bound" : "bind refused"));
 }
