@@ -147,6 +147,8 @@ typedef void *KwabiIntoClause;
 typedef void *KwabiExplainState;
 typedef void *KwabiParamListInfo;
 typedef void *KwabiQueryEnvironment;
+typedef void *KwabiDestReceiver;
+typedef void *KwabiQueryCompletion;
 typedef void *KwabiSnapshot;
 typedef void *KwabiTriggerDesc;
 typedef void *KwabiTrigger;
@@ -612,6 +614,19 @@ typedef KwabiStatus (*KwabiPlannerBody)(KwabiNode parse, const char *queryString
                                         KwabiParamListInfo boundParams,
                                         KwabiHookNext next, KwabiNode *planned,
                                         KwabiError *err, void *arg);
+
+/* Utility statements (ProcessUtility_hook). `context` is PostgreSQL's
+ * ProcessUtilityContext value; `qc` is filled by the standard function and is
+ * passed through unchanged by a body. A body that returns KWABI_OK has run the
+ * rest of the chain or has chosen not to, and the statement's effects are its own. */
+typedef KwabiStatus (*KwabiProcessUtilityBody)(KwabiNode pstmt, const char *queryString,
+                                               int readOnlyTree, int context,
+                                               KwabiParamListInfo params,
+                                               KwabiQueryEnvironment queryEnv,
+                                               KwabiDestReceiver dest,
+                                               KwabiQueryCompletion qc,
+                                               KwabiHookNext next, KwabiError *err,
+                                               void *arg);
 
 typedef struct KwabiV1 {
     uint32_t version;  /* KWABI_VERSION_1 */
@@ -1123,6 +1138,15 @@ typedef struct KwabiV1 {
                                      const char *queryString, int cursorOptions,
                                      KwabiParamListInfo boundParams, KwabiNode *planned,
                                      KwabiError *err);
+
+    /* ---- Utility hook (appended, still v1) ---- */
+    KwabiStatus (*hook_register_process_utility)(KwabiProcessUtilityBody body, void *arg);
+    KwabiStatus (*hook_next_process_utility)(KwabiHookNext next, KwabiNode pstmt,
+                                             const char *queryString, int readOnlyTree,
+                                             int context, KwabiParamListInfo params,
+                                             KwabiQueryEnvironment queryEnv,
+                                             KwabiDestReceiver dest,
+                                             KwabiQueryCompletion qc, KwabiError *err);
 
 } KwabiV1;
 

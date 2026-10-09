@@ -19,6 +19,7 @@
 #include "shim_internal.h"
 #include "executor/executor.h"
 #include "optimizer/planner.h"
+#include "tcop/utility.h"
 #include "utils/builtins.h"
 
 #define KWABI_HOOK_MAX_BODIES 8
@@ -31,6 +32,7 @@ typedef enum HookPoint
     HOOK_END,
     HOOK_CHECK_PERMS,
     HOOK_PLANNER,
+    HOOK_UTILITY,
     HOOK_NPOINTS
 } HookPoint;
 
@@ -59,6 +61,7 @@ static ExecutorFinish_hook_type prev_finish = NULL;
 static ExecutorEnd_hook_type prev_end = NULL;
 static ExecutorCheckPerms_hook_type prev_check_perms = NULL;
 static planner_hook_type prev_planner = NULL;
+static ProcessUtility_hook_type prev_utility = NULL;
 
 /* ========================================================================
  * Errors: a PostgreSQL ErrorData becomes a KwabiError, and a KwabiError becomes
@@ -296,6 +299,40 @@ planner_link(Query *parse, const char *query_string, int cursorOptions,
     return status;
 }
 
+static KwabiStatus
+utility_link(PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
+             ProcessUtilityContext context, ParamListInfo params,
+             QueryEnvironment *queryEnv, DestReceiver *dest, QueryCompletion *qc,
+             KwabiError *err)
+{
+    MemoryContext volatile oldcxt = CurrentMemoryContext;
+    KwabiStatus volatile status = KWABI_OK;
+
+    PG_TRY();
+    {
+        if (prev_utility)
+            prev_utility(pstmt, queryString, readOnlyTree, context, params,
+                         queryEnv, dest, qc);
+        else
+            standard_ProcessUtility(pstmt, queryString, readOnlyTree, context, params,
+                                    queryEnv, dest, qc);
+    }
+    PG_CATCH();
+    {
+        ErrorData  *edata;
+
+        MemoryContextSwitchTo(oldcxt);
+        edata = CopyErrorData();
+        FlushErrorState();
+        error_from_edata(err, edata);
+        FreeErrorData(edata);
+        status = KWABI_ERR_RAISED;
+    }
+    PG_END_TRY();
+
+    return status;
+}
+
 /* ========================================================================
  * Chains. chain_X(index, ...) runs body `index`, or the standard link once the
  * registered bodies are exhausted. The `next` handle a body receives is a HookLink
@@ -393,6 +430,29 @@ chain_planner(int index, Query *parse, const char *query_string, int cursorOptio
     return planner_link(parse, query_string, cursorOptions, boundParams, planned, err);
 }
 
+static KwabiStatus
+chain_utility(int index, PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
+              ProcessUtilityContext context, ParamListInfo params,
+              QueryEnvironment *queryEnv, DestReceiver *dest, QueryCompletion *qc,
+              KwabiError *err)
+{
+    if (index < nbodies[HOOK_UTILITY])
+    {
+        HookLink    link = {index, false};
+        HookBody   *b = &bodies[HOOK_UTILITY][index];
+
+        return ((KwabiProcessUtilityBody) b->fn)((KwabiNode) pstmt, queryString,
+                                                 readOnlyTree ? 1 : 0, (int) context,
+                                                 (KwabiParamListInfo) params,
+                                                 (KwabiQueryEnvironment) queryEnv,
+                                                 (KwabiDestReceiver) dest,
+                                                 (KwabiQueryCompletion) qc,
+                                                 (KwabiHookNext) &link, err, b->arg);
+    }
+    return utility_link(pstmt, queryString, readOnlyTree, context, params,
+                        queryEnv, dest, qc, err);
+}
+
 /* ========================================================================
  * The trampolines PostgreSQL calls. No PG_TRY, and no body is called under one.
  * A failed chain is raised here, after it has returned.
@@ -447,6 +507,19 @@ trampoline_end(QueryDesc *qd)
 
     kwabi_error_init(&err);
     if (chain_end(0, qd, &err) != KWABI_OK)
+        raise_from_error(&err);
+}
+
+static void
+trampoline_utility(PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
+                   ProcessUtilityContext context, ParamListInfo params,
+                   QueryEnvironment *queryEnv, DestReceiver *dest, QueryCompletion *qc)
+{
+    KwabiError  err;
+
+    kwabi_error_init(&err);
+    if (chain_utility(0, pstmt, queryString, readOnlyTree, context, params,
+                      queryEnv, dest, qc, &err) != KWABI_OK)
         raise_from_error(&err);
 }
 
@@ -533,6 +606,10 @@ register_body(HookPoint point, void *fn, void *arg)
                 prev_planner = planner_hook;
                 planner_hook = trampoline_planner;
                 break;
+            case HOOK_UTILITY:
+                prev_utility = ProcessUtility_hook;
+                ProcessUtility_hook = trampoline_utility;
+                break;
             default:
                 break;
         }
@@ -575,6 +652,12 @@ static KwabiStatus
 shim_hook_register_planner(KwabiPlannerBody body, void *arg)
 {
     return register_body(HOOK_PLANNER, (void *) body, arg);
+}
+
+static KwabiStatus
+shim_hook_register_process_utility(KwabiProcessUtilityBody body, void *arg)
+{
+    return register_body(HOOK_UTILITY, (void *) body, arg);
 }
 
 /* ========================================================================
@@ -659,9 +742,27 @@ shim_hook_next_planner(KwabiHookNext next, KwabiNode parse, const char *queryStr
                          (ParamListInfo) boundParams, (PlannedStmt **) planned, err);
 }
 
+static KwabiStatus
+shim_hook_next_process_utility(KwabiHookNext next, KwabiNode pstmt, const char *queryString,
+                               int readOnlyTree, int context, KwabiParamListInfo params,
+                               KwabiQueryEnvironment queryEnv, KwabiDestReceiver dest,
+                               KwabiQueryCompletion qc, KwabiError *err)
+{
+    HookLink   *link = (HookLink *) next;
+
+    if (link == NULL)
+        return next_invalid(err);
+    return chain_utility(link->index + 1, (PlannedStmt *) pstmt, queryString,
+                         readOnlyTree != 0, (ProcessUtilityContext) context,
+                         (ParamListInfo) params, (QueryEnvironment *) queryEnv,
+                         (DestReceiver *) dest, (QueryCompletion *) qc, err);
+}
+
 void
 init_group_hook(void)
 {
+    shim_table.hook_register_process_utility = shim_hook_register_process_utility;
+    shim_table.hook_next_process_utility     = shim_hook_next_process_utility;
     shim_table.hook_register_executor_check_perms = shim_hook_register_executor_check_perms;
     shim_table.hook_register_planner              = shim_hook_register_planner;
     shim_table.hook_next_executor_check_perms     = shim_hook_next_executor_check_perms;
@@ -853,4 +954,51 @@ kwabi_hook_test_deny(PG_FUNCTION_ARGS)
 {
     test_deny = PG_GETARG_BOOL(0);
     PG_RETURN_BOOL(test_deny);
+}
+
+/* Utility test body. Records the traced statements; can deny them. */
+static bool test_utility_deny = false;
+
+static KwabiStatus
+test_utility(KwabiNode pstmt, const char *queryString, int readOnlyTree, int context,
+             KwabiParamListInfo params, KwabiQueryEnvironment queryEnv,
+             KwabiDestReceiver dest, KwabiQueryCompletion qc, KwabiHookNext next,
+             KwabiError *err, void *arg)
+{
+    bool        traced = queryString != NULL && strstr(queryString, "kwt_trace") != NULL;
+
+    test_record((const char *) arg, traced);
+    if (traced && test_utility_deny)
+    {
+        kwabi_error_init(err);
+        kwabi_error_set_core(err, ERRCODE_INSUFFICIENT_PRIVILEGE, KWABI_ERR_BODY_RAISED,
+                             "utility denied by kwabi test body");
+        return KWABI_ERR_BODY_RAISED;
+    }
+    return shim_api->hook_next_process_utility(next, pstmt, queryString, readOnlyTree,
+                                               context, params, queryEnv, dest, qc, err);
+}
+
+PG_FUNCTION_INFO_V1(kwabi_hook_test_install_utility);
+Datum
+kwabi_hook_test_install_utility(PG_FUNCTION_ARGS)
+{
+    static bool installed = false;
+
+    if (installed)
+        PG_RETURN_TEXT_P(cstring_to_text("already installed"));
+    if (shim_api == NULL || shim_api->hook_register_process_utility == NULL)
+        ereport(ERROR, (errmsg("kwabi: utility slot is not wired")));
+    if (shim_api->hook_register_process_utility(test_utility, (void *) "U") != KWABI_OK)
+        ereport(ERROR, (errmsg("kwabi: hook registration failed")));
+    installed = true;
+    PG_RETURN_TEXT_P(cstring_to_text("installed"));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_hook_test_deny_utility);
+Datum
+kwabi_hook_test_deny_utility(PG_FUNCTION_ARGS)
+{
+    test_utility_deny = PG_GETARG_BOOL(0);
+    PG_RETURN_BOOL(test_utility_deny);
 }

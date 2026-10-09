@@ -24,6 +24,8 @@ DROP FUNCTION IF EXISTS kwabi_hook_test_trace();
 DROP FUNCTION IF EXISTS kwabi_hook_test_refuse(boolean);
 DROP FUNCTION IF EXISTS kwabi_hook_test_install_planner();
 DROP FUNCTION IF EXISTS kwabi_hook_test_deny(boolean);
+DROP FUNCTION IF EXISTS kwabi_hook_test_install_utility();
+DROP FUNCTION IF EXISTS kwabi_hook_test_deny_utility(boolean);
 
 CREATE FUNCTION kwabi_hook_test_install() RETURNS text
     AS :'bundle', 'kwabi_hook_test_install' LANGUAGE C;
@@ -37,6 +39,10 @@ CREATE FUNCTION kwabi_hook_test_install_planner() RETURNS text
     AS :'bundle', 'kwabi_hook_test_install_planner' LANGUAGE C;
 CREATE FUNCTION kwabi_hook_test_deny(boolean) RETURNS boolean
     AS :'bundle', 'kwabi_hook_test_deny' LANGUAGE C;
+CREATE FUNCTION kwabi_hook_test_install_utility() RETURNS text
+    AS :'bundle', 'kwabi_hook_test_install_utility' LANGUAGE C;
+CREATE FUNCTION kwabi_hook_test_deny_utility(boolean) RETURNS boolean
+    AS :'bundle', 'kwabi_hook_test_deny_utility' LANGUAGE C;
 
 SELECT 'install: ' || kwabi_hook_test_install() AS status;
 
@@ -159,5 +165,73 @@ DECLARE tr text;
 BEGIN
   tr := kwabi_hook_test_trace();
   RAISE NOTICE 'check untraced_with_planner_records_nothing (trace=%): %', tr,
+    CASE WHEN tr = '' THEN 't' ELSE 'f' END;
+END $$;
+
+-- 9. Utility statements. A SET is a utility statement with no executor work, so the
+--    only hook that runs is the utility body. Its trace is 'U' for a traced statement.
+SELECT 'install utility: ' || kwabi_hook_test_install_utility() AS status_utility;
+SELECT kwabi_hook_test_clear();
+SET application_name = 'before' /* kwt_trace */;
+DO $$
+DECLARE tr text;
+BEGIN
+  tr := kwabi_hook_test_trace();
+  RAISE NOTICE 'check utility_records_u (trace=%): %', tr,
+    CASE WHEN tr = 'U' THEN 't' ELSE 'f' END;
+END $$;
+
+-- 10. A standard error from a utility statement passes through the chain. The first
+--     CREATE succeeds and the second raises 42P07.
+DROP TABLE IF EXISTS kwt_trace_dup;
+SELECT kwabi_hook_test_clear();
+DO $$
+DECLARE r text; tr text;
+BEGIN
+  BEGIN
+    EXECUTE 'CREATE TEMP TABLE kwt_trace_dup (i int) /* kwt_trace */';
+    EXECUTE 'CREATE TEMP TABLE kwt_trace_dup (i int) /* kwt_trace */';
+    r := 'no error';
+  EXCEPTION WHEN others THEN
+    r := SQLSTATE;
+  END;
+  tr := kwabi_hook_test_trace();
+  RAISE NOTICE 'check utility_standard_error (got %): %', r,
+    CASE WHEN r = '42P07' THEN 't' ELSE 'f' END;
+  -- PL/pgSQL may plan and run the EXECUTE more than once, and the planner body also
+  -- records here, so the check counts the utility entries rather than matching the
+  -- whole trace. Both CREATEs must reach the utility chain.
+  RAISE NOTICE 'check utility_trace_per_statement (trace=%): %', tr,
+    CASE WHEN length(regexp_replace(tr, '[^U]', '', 'g')) >= 2 THEN 't' ELSE 'f' END;
+END $$;
+
+-- 11. A denied utility statement does not run: the setting keeps its old value.
+SELECT kwabi_hook_test_deny_utility(true);
+SELECT kwabi_hook_test_clear();
+DO $$
+DECLARE r text; tr text;
+BEGIN
+  BEGIN
+    EXECUTE 'SET application_name = ''after'' /* kwt_trace */';
+    r := 'no error';
+  EXCEPTION WHEN others THEN
+    r := SQLSTATE || '|' || SQLERRM;
+  END;
+  tr := kwabi_hook_test_trace();
+  RAISE NOTICE 'check utility_denial (got %): %', r,
+    CASE WHEN r = '42501|utility denied by kwabi test body' THEN 't' ELSE 'f' END;
+  RAISE NOTICE 'check denied_utility_did_not_run (setting=%): %', current_setting('application_name'),
+    CASE WHEN current_setting('application_name') = 'before' THEN 't' ELSE 'f' END;
+END $$;
+SELECT kwabi_hook_test_deny_utility(false);
+
+-- 12. Negative control: an untraced utility statement records nothing.
+SELECT kwabi_hook_test_clear();
+SET application_name = 'plain';
+DO $$
+DECLARE tr text;
+BEGIN
+  tr := kwabi_hook_test_trace();
+  RAISE NOTICE 'check untraced_utility_records_nothing (trace=%): %', tr,
     CASE WHEN tr = '' THEN 't' ELSE 'f' END;
 END $$;

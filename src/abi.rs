@@ -145,6 +145,19 @@ pub type KwabiExecutorCheckPermsBody = unsafe extern "C" fn(
     *mut KwabiError,
     *mut c_void,
 ) -> c_int;
+pub type KwabiProcessUtilityBody = unsafe extern "C" fn(
+    *mut c_void,
+    *const c_char,
+    c_int,
+    c_int,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut KwabiError,
+    *mut c_void,
+) -> c_int;
 pub type KwabiPlannerBody = unsafe extern "C" fn(
     *mut c_void,
     *const c_char,
@@ -447,11 +460,27 @@ pub struct KwabiV1 {
             *mut KwabiError,
         ) -> c_int,
     >,
+    pub hook_register_process_utility:
+        Option<unsafe extern "C" fn(KwabiProcessUtilityBody, *mut c_void) -> c_int>,
+    pub hook_next_process_utility: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *const c_char,
+            c_int,
+            c_int,
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            *mut KwabiError,
+        ) -> c_int,
+    >,
 }
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 218;
+    pub const FIELD_COUNT: usize = 220;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -679,6 +708,8 @@ impl Default for KwabiV1 {
             hook_register_planner: None,
             hook_next_executor_check_perms: None,
             hook_next_planner: None,
+            hook_register_process_utility: None,
+            hook_next_process_utility: None,
         }
     }
 }

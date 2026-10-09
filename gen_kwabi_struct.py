@@ -71,6 +71,7 @@ VERBATIM = {
     "KwabiExecutorEndBody": "KwabiExecutorEndBody",
     "KwabiExecutorCheckPermsBody": "KwabiExecutorCheckPermsBody",
     "KwabiPlannerBody": "KwabiPlannerBody",
+    "KwabiProcessUtilityBody": "KwabiProcessUtilityBody",
 }
 
 # Opaque handle typedefs -> the Rust pointee they actually are.
@@ -106,6 +107,8 @@ HANDLES = {
     "Node": "c_void",
     "Plan": "c_void",
     "KwabiQueryDesc": "c_void",
+    "KwabiDestReceiver": "c_void",
+    "KwabiQueryCompletion": "c_void",
     "QueryDesc": "c_void",
     "ParamListInfo": "c_void",
     "Snapshot": "c_void",
@@ -426,6 +429,8 @@ def emit(fields):
     L.append("    unsafe extern \"C\" fn(*mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
     L.append("pub type KwabiExecutorCheckPermsBody =")
     L.append("    unsafe extern \"C\" fn(*mut c_void, *mut c_void, c_int, *mut c_void, *mut c_int, *mut KwabiError, *mut c_void) -> c_int;")
+    L.append("pub type KwabiProcessUtilityBody =")
+    L.append("    unsafe extern \"C\" fn(*mut c_void, *const c_char, c_int, c_int, *mut c_void, *mut c_void, *mut c_void, *mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
     L.append("pub type KwabiPlannerBody =")
     L.append("    unsafe extern \"C\" fn(*mut c_void, *const c_char, c_int, *mut c_void, *mut c_void, *mut *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
     L.append("")

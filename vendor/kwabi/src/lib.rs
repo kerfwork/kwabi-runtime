@@ -468,6 +468,22 @@ pub struct KwabiV1 {
             *mut guarded::KwabiErrorAbi,
         ) -> i32,
     >,
+    pub hook_register_process_utility:
+        Option<unsafe extern "C" fn(KwabiProcessUtilityBodyFn, *mut std::ffi::c_void) -> i32>,
+    pub hook_next_process_utility: Option<
+        unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *const std::ffi::c_char,
+            i32,
+            i32,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut guarded::KwabiErrorAbi,
+        ) -> i32,
+    >,
 }
 
 pub type KwabiExecutorCheckPermsBodyFn = unsafe extern "C" fn(
@@ -476,6 +492,19 @@ pub type KwabiExecutorCheckPermsBodyFn = unsafe extern "C" fn(
     i32,
     *mut std::ffi::c_void,
     *mut i32,
+    *mut guarded::KwabiErrorAbi,
+    *mut std::ffi::c_void,
+) -> i32;
+pub type KwabiProcessUtilityBodyFn = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const std::ffi::c_char,
+    i32,
+    i32,
+    *mut std::ffi::c_void,
+    *mut std::ffi::c_void,
+    *mut std::ffi::c_void,
+    *mut std::ffi::c_void,
+    *mut std::ffi::c_void,
     *mut guarded::KwabiErrorAbi,
     *mut std::ffi::c_void,
 ) -> i32;
