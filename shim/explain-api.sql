@@ -25,6 +25,8 @@ DROP FUNCTION IF EXISTS kwabi_explain_get_index_name_test(int4);
 DROP FUNCTION IF EXISTS kwabi_explain_control();
 DROP FUNCTION IF EXISTS kwabi_explain_matches_sql_test(text);
 DROP FUNCTION IF EXISTS kwabi_explain_bad_option_test();
+DROP FUNCTION IF EXISTS kwabi_explain_analyze_matches_sql_test(text);
+DROP FUNCTION IF EXISTS kwabi_explain_option_version_test();
 
 CREATE FUNCTION kwabi_explain_get_index_name_test(int4)
     RETURNS text AS :'bundle','kwabi_explain_get_index_name_test' LANGUAGE C;
@@ -34,6 +36,10 @@ CREATE FUNCTION kwabi_explain_matches_sql_test(text)
     RETURNS bool AS :'bundle','kwabi_explain_matches_sql_test' LANGUAGE C;
 CREATE FUNCTION kwabi_explain_bad_option_test()
     RETURNS bool AS :'bundle','kwabi_explain_bad_option_test' LANGUAGE C;
+CREATE FUNCTION kwabi_explain_analyze_matches_sql_test(text)
+    RETURNS bool AS :'bundle','kwabi_explain_analyze_matches_sql_test' LANGUAGE C;
+CREATE FUNCTION kwabi_explain_option_version_test()
+    RETURNS bool AS :'bundle','kwabi_explain_option_version_test' LANGUAGE C;
 
 \echo ''
 \echo '=== 1. explain_get_index_name ==='
@@ -63,5 +69,13 @@ SELECT kwabi_explain_matches_sql_test('SELECT 1 FROM pg_class') AS explain_match
 \echo ''
 \echo '=== 5. an unknown EXPLAIN option must raise through the ABI ==='
 SELECT kwabi_explain_bad_option_test() AS explain_bad_option_raises;
+
+\echo ''
+\echo '=== 6. EXPLAIN ANALYZE through the ABI: runs the plan; text must equal SQL EXPLAIN ANALYZE ==='
+SELECT kwabi_explain_analyze_matches_sql_test('SELECT 1 FROM pg_class') AS explain_analyze_matches_scan;
+
+\echo ''
+\echo '=== 7. version-specific options are accepted only on the majors that have them ==='
+SELECT kwabi_explain_option_version_test() AS explain_option_version;
 
 \echo '=== explain-api tests complete ==='

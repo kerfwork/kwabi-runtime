@@ -857,6 +857,10 @@ typedef struct KwabiV1 {
      * format is an int (not an enum, which has implementation-defined width
      * at the ABI): 0 = text, 1 = xml, 2 = json, 3 = yaml.
      *
+     * A new state starts from the C defaults of ExplainState, not the SQL defaults:
+     * on PG 18 SQL EXPLAIN ANALYZE turns BUFFERS on, the ABI state does not. Set
+     * every option the caller depends on.
+     *
      * explain_state_set_option takes a PostgreSQL EXPLAIN option name (verbose,
      * costs, buffers, wal, timing, summary, memory, settings, generic, analyze).
      * An unknown name raises. The version-specific options raise on majors that

@@ -206,23 +206,25 @@ init_group_explain(void)
 /* ---- proof functions ------------------------------------------------- */
 
 /*
- * kwabi_explain_matches_sql_test(sql) -> bool
+ * explain_abi_matches_sql(sql, analyze) -> bool
  *
- * Plan sql, EXPLAIN it through the ABI with COSTS OFF, and EXPLAIN it through
- * SQL with the same options. The two texts must be byte-identical.
+ * Plan sql. EXPLAIN it through the ABI, and through SQL with the same options.
+ * The two texts must be byte-identical. Timing and the summary are off on both
+ * sides, so the text is deterministic. BUFFERS is off too: PostgreSQL 18 turns
+ * it on by default under ANALYZE, while a fresh ExplainState starts from the C
+ * defaults (off). Callers must set options explicitly; the ABI does not apply
+ * SQL's defaults. With analyze, the plan runs on both
+ * sides, and the row counts must agree too.
  */
-PG_FUNCTION_INFO_V1(kwabi_explain_matches_sql_test);
-
-Datum
-kwabi_explain_matches_sql_test(PG_FUNCTION_ARGS)
+static bool
+explain_abi_matches_sql(const char *sql, bool analyze)
 {
     if (shim_api == NULL || shim_api->explain_query == NULL ||
         shim_api->explain_state_new == NULL || shim_api->explain_state_text == NULL ||
         shim_api->explain_state_free == NULL || shim_api->explain_state_set_option == NULL)
         ereport(ERROR, (errmsg("kwabi: explain slots are not wired")));
 
-    char       *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
-    KwabiNode   query = shim_api->parse_stmt(sql);
+    KwabiNode query = shim_api->parse_stmt(sql);
     if (query == NULL)
         ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
 
@@ -232,19 +234,24 @@ kwabi_explain_matches_sql_test(PG_FUNCTION_ARGS)
 
     KwabiExplainState es = shim_api->explain_state_new();
     shim_api->explain_state_set_option(es, "costs", false);
+    shim_api->explain_state_set_option(es, "timing", false);
+    shim_api->explain_state_set_option(es, "summary", false);
+    shim_api->explain_state_set_option(es, "buffers", false);
+    shim_api->explain_state_set_option(es, "analyze", analyze);
     shim_api->explain_query((KwabiQueryDesc) qd, NULL, es, sql, NULL, NULL);
     char *from_abi = pstrdup(shim_api->explain_state_text(es));
     shim_api->explain_state_free(es);
     FreeQueryDesc(qd);
 
-    /* The SQL side, read row by row. Buffer and handle are made before SPI
-     * connects so SPI_finish does not free them. */
+    /* The SQL side, row by row. The buffer is made before SPI connects so
+     * SPI_finish does not free it. */
     StringInfoData from_sql;
     initStringInfo(&from_sql);
 
     if (SPI_connect() != SPI_OK_CONNECT)
         ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
-    if (SPI_execute(psprintf("EXPLAIN (COSTS OFF) %s", sql), false, 0) < 0) {
+    if (SPI_execute(psprintf("EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF%s) %s",
+                             analyze ? ", ANALYZE" : "", sql), false, 0) < 0) {
         SPI_finish();
         ereport(ERROR, (errmsg("kwabi: EXPLAIN via SPI failed")));
     }
@@ -255,9 +262,97 @@ kwabi_explain_matches_sql_test(PG_FUNCTION_ARGS)
     }
     SPI_finish();
 
-    bool ok = (strcmp(from_abi, from_sql.data) == 0);
+    return strcmp(from_abi, from_sql.data) == 0;
+}
+
+/*
+ * kwabi_explain_matches_sql_test(sql) -> bool
+ *
+ * EXPLAIN text through the ABI equals SQL EXPLAIN, without ANALYZE.
+ */
+PG_FUNCTION_INFO_V1(kwabi_explain_matches_sql_test);
+
+Datum
+kwabi_explain_matches_sql_test(PG_FUNCTION_ARGS)
+{
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    bool ok = explain_abi_matches_sql(sql, false);
+
     pfree(sql);
     PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_explain_analyze_matches_sql_test(sql) -> bool
+ *
+ * EXPLAIN ANALYZE through the ABI runs the plan and matches SQL EXPLAIN ANALYZE
+ * byte for byte (actual row counts included).
+ */
+PG_FUNCTION_INFO_V1(kwabi_explain_analyze_matches_sql_test);
+
+Datum
+kwabi_explain_analyze_matches_sql_test(PG_FUNCTION_ARGS)
+{
+    char *sql = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    bool ok = explain_abi_matches_sql(sql, true);
+
+    pfree(sql);
+    PG_RETURN_BOOL(ok);
+}
+
+/* 1 if the option is accepted, 0 if it raises. Any other error is rethrown. */
+static bool
+explain_option_accepted(KwabiExplainState es, const char *name)
+{
+    bool accepted = true;
+
+    PG_TRY();
+    {
+        shim_api->explain_state_set_option(es, name, true);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+
+        if (strstr(edata->message, "unknown EXPLAIN option") == NULL)
+        {
+            PG_RE_THROW();
+        }
+        accepted = false;
+        FreeErrorData(edata);
+        FlushErrorState();
+    }
+    PG_END_TRY();
+
+    return accepted;
+}
+
+/*
+ * kwabi_explain_option_version_test() -> bool
+ *
+ * The options that exist only on some majors must be accepted exactly there:
+ * memory on 17 and later, settings and generic on 18. Elsewhere they raise.
+ */
+PG_FUNCTION_INFO_V1(kwabi_explain_option_version_test);
+
+Datum
+kwabi_explain_option_version_test(PG_FUNCTION_ARGS)
+{
+    KwabiExplainState es = shim_api->explain_state_new();
+    bool memory_ok, settings_ok, generic_ok;
+
+    memory_ok = explain_option_accepted(es, "memory");
+    settings_ok = explain_option_accepted(es, "settings");
+    generic_ok = explain_option_accepted(es, "generic");
+    shim_api->explain_state_free(es);
+
+#if PG_VERSION_NUM >= 180000
+    PG_RETURN_BOOL(memory_ok && settings_ok && generic_ok);
+#elif PG_VERSION_NUM >= 170000
+    PG_RETURN_BOOL(memory_ok && !settings_ok && !generic_ok);
+#else
+    PG_RETURN_BOOL(!memory_ok && !settings_ok && !generic_ok);
+#endif
 }
 
 static void call_explain_bad_option(void)
