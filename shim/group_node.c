@@ -516,9 +516,9 @@ shim_sequence_setval(Oid seq_oid, int64 value)
  * yields a context, so end has nothing to release for NULL.
  */
 static KwabiLogicalDecodingCtx
-shim_logical_decoding_begin(Oid slot_oid, int64 start_lsn)
+shim_logical_decoding_begin(const char *slot_name, int64 start_lsn)
 {
-    (void) slot_oid;
+    (void) slot_name;
     (void) start_lsn;
     ereport(ERROR, (errmsg("kwabi: logical decoding is not supported by this shim")));
     return NULL;
@@ -1370,7 +1370,7 @@ slot_raises_not_supported(void (*call)(void))
     return ok;
 }
 
-static void call_logical_decoding_begin(void) { (void) shim_api->logical_decoding_begin(InvalidOid, 0); }
+static void call_logical_decoding_begin(void) { (void) shim_api->logical_decoding_begin(NULL, 0); }
 static void call_reorderbuffer_get_changes(void) { (void) shim_api->reorderbuffer_get_changes(NULL, InvalidTransactionId); }
 static void call_reorderbuffer_get_lsn(void) { (void) shim_api->reorderbuffer_get_lsn(NULL); }
 

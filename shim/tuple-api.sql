@@ -45,9 +45,9 @@ CREATE FUNCTION kwabi_slot_test()
 CREATE FUNCTION kwabi_slot_is_active_test()
     RETURNS bool AS :'bundle','kwabi_slot_is_active_test' LANGUAGE C;
 CREATE FUNCTION kwabi_slot_get_lsn_test()
-    RETURNS int8 AS :'bundle','kwabi_slot_get_lsn_test' LANGUAGE C;
+    RETURNS bool AS :'bundle','kwabi_slot_get_lsn_test' LANGUAGE C;
 CREATE FUNCTION kwabi_slot_get_catalog_xmin_test()
-    RETURNS int8 AS :'bundle','kwabi_slot_get_catalog_xmin_test' LANGUAGE C;
+    RETURNS bool AS :'bundle','kwabi_slot_get_catalog_xmin_test' LANGUAGE C;
 CREATE FUNCTION kwabi_itempointer_get_block_number_test()
     RETURNS bool AS :'bundle','kwabi_itempointer_get_block_number_test' LANGUAGE C;
 CREATE FUNCTION kwabi_itempointer_is_valid_test()

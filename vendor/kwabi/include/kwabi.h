@@ -662,7 +662,7 @@ typedef struct KwabiV1 {
     int64 (*sequence_setval)(Oid seq_oid, int64 value);
 
     /* ---- Replication ---- */
-    KwabiLogicalDecodingCtx (*logical_decoding_begin)(Oid slot_oid, int64 start_lsn);
+    KwabiLogicalDecodingCtx (*logical_decoding_begin)(const char *slot_name, int64 start_lsn);
     void (*logical_decoding_end)(KwabiLogicalDecodingCtx ctx);
     bool (*logical_decoding_read)(KwabiLogicalDecodingCtx ctx, int64 *lsn, StringInfo data);
     void (*output_plugin_startup)(KwabiOutputPluginCallbacks callbacks);
@@ -889,9 +889,11 @@ typedef struct KwabiV1 {
     int64 (*reorderbuffer_get_lsn)(KwabiReorderBuffer rb);
     int64 (*reorderbuffer_get_xid)(KwabiReorderBuffer rb, TransactionId xid);
     int (*reorderbuffer_get_changes)(KwabiReorderBuffer rb, TransactionId xid);
-    int64 (*slot_get_lsn)(Oid slot_oid);
-    int64 (*slot_get_catalog_xmin)(Oid slot_oid);
-    bool (*slot_is_active)(Oid slot_oid);
+    /* Replication slots are found by name; PostgreSQL gives slots no OID. Each
+     * raises if no slot has that name. */
+    int64 (*slot_get_lsn)(const char *slot_name);
+    int64 (*slot_get_catalog_xmin)(const char *slot_name);
+    bool (*slot_is_active)(const char *slot_name);
 
     /* ---- Postmaster ---- */
     bool (*postmaster_is_alive)(void);

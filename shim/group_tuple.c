@@ -1,6 +1,8 @@
 /* group_tuple.c — tuple/slot slots for the kwabi shim */
 
 #include "shim_internal.h"
+#include "replication/slot.h"       /* SearchNamedReplicationSlot */
+#include "utils/pg_lsn.h"           /* DatumGetLSN */
 
 static int
 shim_tuple_natts(TupleDesc tupdesc)
@@ -184,88 +186,69 @@ shim_block_get_offset(ItemPointer pointer)
     return ItemPointerGetOffsetNumber(pointer);
 }
 
+/*
+ * Replication slots are found by name. PostgreSQL gives them no OID, so the
+ * ABI takes the name. Fields that the slot's spinlock protects are read under
+ * it, and the control lock is held while the slot is looked up. A slot that
+ * does not exist raises, after the lock is released.
+ */
+static void
+shim_slot_read(const char *slot_name, XLogRecPtr *restart_lsn,
+               TransactionId *catalog_xmin, bool *active)
+{
+    ReplicationSlot *slot;
+    bool             found;
+
+    if (slot_name == NULL)
+        ereport(ERROR, (errmsg("kwabi: replication slot name is NULL")));
+
+    LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+    slot = SearchNamedReplicationSlot(slot_name, false);
+    found = (slot != NULL);
+    if (found) {
+        SpinLockAcquire(&slot->mutex);
+        *restart_lsn = slot->data.restart_lsn;
+        *catalog_xmin = slot->data.catalog_xmin;
+        *active = (slot->active_pid != 0);
+        SpinLockRelease(&slot->mutex);
+    }
+    LWLockRelease(ReplicationSlotControlLock);
+
+    if (!found)
+        ereport(ERROR, (errmsg("kwabi: replication slot \"%s\" does not exist", slot_name)));
+}
+
 static bool
-shim_slot_is_active(Oid slot_oid)
+shim_slot_is_active(const char *slot_name)
 {
-    if (SPI_connect() != SPI_OK_CONNECT)
-        return false;
+    XLogRecPtr      lsn;
+    TransactionId   xmin;
+    bool            active;
 
-    char query[256];
-    snprintf(query, sizeof(query),
-             "SELECT active FROM pg_replication_slots WHERE slot_name = 'slot_%u'",
-             slot_oid);
-
-    if (SPI_execute(query, true, 0) < 0) {
-        SPI_finish();
-        return false;
-    }
-
-    bool result = false;
-    if (SPI_processed > 0 && SPI_tuptable != NULL && SPI_tuptable->vals != NULL) {
-        bool isnull;
-        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
-        if (!isnull)
-            result = DatumGetBool(d);
-    }
-
-    SPI_finish();
-    return result;
+    shim_slot_read(slot_name, &lsn, &xmin, &active);
+    return active;
 }
 
 static int64
-shim_slot_get_lsn(Oid slot_oid)
+shim_slot_get_lsn(const char *slot_name)
 {
-    if (SPI_connect() != SPI_OK_CONNECT)
-        return -1;
+    XLogRecPtr      lsn;
+    TransactionId   xmin;
+    bool            active;
 
-    char query[256];
-    snprintf(query, sizeof(query),
-             "SELECT restart_lsn FROM pg_replication_slots WHERE slot_name = 'slot_%u'",
-             slot_oid);
-
-    if (SPI_execute(query, true, 0) < 0) {
-        SPI_finish();
-        return -1;
-    }
-
-    int64 result = -1;
-    if (SPI_processed > 0 && SPI_tuptable != NULL && SPI_tuptable->vals != NULL) {
-        bool isnull;
-        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
-        if (!isnull)
-            result = (int64) DatumGetInt64(d);
-    }
-
-    SPI_finish();
-    return result;
+    shim_slot_read(slot_name, &lsn, &xmin, &active);
+    return (int64) lsn;
 }
 
 static int64
-shim_slot_get_catalog_xmin(Oid slot_oid)
+shim_slot_get_catalog_xmin(const char *slot_name)
 {
-    if (SPI_connect() != SPI_OK_CONNECT)
-        return -1;
+    XLogRecPtr      lsn;
+    TransactionId   xmin;
+    bool            active;
 
-    char query[256];
-    snprintf(query, sizeof(query),
-             "SELECT catalog_xmin FROM pg_replication_slots WHERE slot_name = 'slot_%u'",
-             slot_oid);
-
-    if (SPI_execute(query, true, 0) < 0) {
-        SPI_finish();
-        return -1;
-    }
-
-    int64 result = -1;
-    if (SPI_processed > 0 && SPI_tuptable != NULL && SPI_tuptable->vals != NULL) {
-        bool isnull;
-        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
-        if (!isnull)
-            result = (int64) DatumGetInt64(d);
-    }
-
-    SPI_finish();
-    return result;
+    shim_slot_read(slot_name, &lsn, &xmin, &active);
+    return (int64) xmin;
 }
 
 static bool
@@ -309,4 +292,259 @@ init_group_tuple(void)
     shim_table.itempointer_is_valid = shim_itempointer_is_valid;
     shim_table.block_get_offset = shim_block_get_offset;
     shim_table.block_is_valid = shim_block_is_valid;
+}
+
+/* ---- proof functions for the slot, block and item-pointer slots ------- */
+
+/*
+ * A physical replication slot the test owns. It is created with
+ * immediately_reserve, so restart_lsn is set, and it is never acquired, so it
+ * is inactive. Any slot left by an earlier run is dropped first.
+ */
+#define KWABI_TUPLE_SLOT "kwabi_tuple_slot"
+
+static void
+kwabi_tuple_slot_create(void)
+{
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+    if (SPI_execute("SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots "
+                    "WHERE slot_name = '" KWABI_TUPLE_SLOT "'", false, 0) < 0 ||
+        SPI_execute("SELECT pg_create_physical_replication_slot('" KWABI_TUPLE_SLOT "', true)",
+                    false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: could not create the test replication slot")));
+    }
+    SPI_finish();
+}
+
+static void
+kwabi_tuple_slot_drop(void)
+{
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+    if (SPI_execute("SELECT pg_drop_replication_slot('" KWABI_TUPLE_SLOT "')", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: could not drop the test replication slot")));
+    }
+    SPI_finish();
+}
+
+/* Read one column of pg_replication_slots for the test slot, as a datum. */
+static Datum
+kwabi_tuple_slot_column(const char *column, bool *isnull)
+{
+    StringInfoData  sql;
+    Datum           result = (Datum) 0;
+
+    /* The query text lives in the SPI context, so build it before connecting. */
+    initStringInfo(&sql);
+    appendStringInfo(&sql, "SELECT %s FROM pg_replication_slots WHERE slot_name = '%s'",
+                     column, KWABI_TUPLE_SLOT);
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+    if (SPI_execute(sql.data, true, 0) < 0 || SPI_processed != 1) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: test replication slot not found in pg_replication_slots")));
+    }
+    result = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, isnull);
+    /* The value is copied out by the caller before SPI_finish when it is
+     * pass-by-value; restart_lsn and catalog_xmin are, so the copy is safe. */
+    SPI_finish();
+    return result;
+}
+
+/*
+ * kwabi_slot_is_active_test() -> bool
+ *
+ * The test slot is inactive, and a name that does not exist must raise.
+ */
+PG_FUNCTION_INFO_V1(kwabi_slot_is_active_test);
+
+Datum
+kwabi_slot_is_active_test(PG_FUNCTION_ARGS)
+{
+    bool ok = false;
+
+    if (shim_api == NULL || shim_api->slot_is_active == NULL)
+        ereport(ERROR, (errmsg("kwabi: slot_is_active is not wired")));
+
+    kwabi_tuple_slot_create();
+    ok = (shim_api->slot_is_active(KWABI_TUPLE_SLOT) == false);
+
+    PG_TRY();
+    {
+        (void) shim_api->slot_is_active("kwabi_no_such_slot");
+        ok = false;
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        if (strstr(edata->message, "does not exist") == NULL)
+            ok = false;
+        FreeErrorData(edata);
+        FlushErrorState();
+    }
+    PG_END_TRY();
+
+    kwabi_tuple_slot_drop();
+    PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_slot_get_lsn_test() -> bool
+ *
+ * slot_get_lsn returns the restart_lsn that pg_replication_slots reports.
+ */
+PG_FUNCTION_INFO_V1(kwabi_slot_get_lsn_test);
+
+Datum
+kwabi_slot_get_lsn_test(PG_FUNCTION_ARGS)
+{
+    bool isnull = true;
+    bool ok;
+
+    if (shim_api == NULL || shim_api->slot_get_lsn == NULL)
+        ereport(ERROR, (errmsg("kwabi: slot_get_lsn is not wired")));
+
+    kwabi_tuple_slot_create();
+    {
+        int64 from_abi = shim_api->slot_get_lsn(KWABI_TUPLE_SLOT);
+        Datum sql_lsn = kwabi_tuple_slot_column("restart_lsn", &isnull);
+        ok = (!isnull && from_abi != 0 && (XLogRecPtr) from_abi == DatumGetLSN(sql_lsn));
+    }
+    kwabi_tuple_slot_drop();
+    PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_slot_get_catalog_xmin_test() -> bool
+ *
+ * A physical slot has no catalog_xmin: the ABI reports 0, and SQL reports NULL.
+ */
+PG_FUNCTION_INFO_V1(kwabi_slot_get_catalog_xmin_test);
+
+Datum
+kwabi_slot_get_catalog_xmin_test(PG_FUNCTION_ARGS)
+{
+    bool isnull = false;
+    bool ok;
+
+    if (shim_api == NULL || shim_api->slot_get_catalog_xmin == NULL)
+        ereport(ERROR, (errmsg("kwabi: slot_get_catalog_xmin is not wired")));
+
+    kwabi_tuple_slot_create();
+    {
+        int64 from_abi = shim_api->slot_get_catalog_xmin(KWABI_TUPLE_SLOT);
+        (void) kwabi_tuple_slot_column("catalog_xmin", &isnull);
+        ok = (from_abi == 0 && isnull);
+    }
+    kwabi_tuple_slot_drop();
+    PG_RETURN_BOOL(ok);
+}
+
+/* ItemPointer (block, offset) = (5, 3), and an invalid one. */
+#define KWABI_TID_BLOCK  ((BlockNumber) 5)
+#define KWABI_TID_OFFSET ((OffsetNumber) 3)
+
+static ItemPointerData
+kwabi_test_tid(void)
+{
+    ItemPointerData tid;
+
+    ItemPointerSet(&tid, KWABI_TID_BLOCK, KWABI_TID_OFFSET);
+    return tid;
+}
+
+/*
+ * kwabi_itempointer_get_block_number_test() -> bool
+ * kwabi_itempointer_get_offset_number_test() -> bool
+ * kwabi_itempointer_is_valid_test() -> bool
+ *
+ * The item pointer slots return the fields a pointer was set with, and report
+ * an invalid pointer as invalid.
+ */
+PG_FUNCTION_INFO_V1(kwabi_itempointer_get_block_number_test);
+
+Datum
+kwabi_itempointer_get_block_number_test(PG_FUNCTION_ARGS)
+{
+    ItemPointerData tid = kwabi_test_tid();
+
+    if (shim_api == NULL || shim_api->itempointer_get_block_number == NULL)
+        ereport(ERROR, (errmsg("kwabi: itempointer_get_block_number is not wired")));
+    PG_RETURN_BOOL(shim_api->itempointer_get_block_number(&tid) == KWABI_TID_BLOCK);
+}
+
+PG_FUNCTION_INFO_V1(kwabi_itempointer_get_offset_number_test);
+
+Datum
+kwabi_itempointer_get_offset_number_test(PG_FUNCTION_ARGS)
+{
+    ItemPointerData tid = kwabi_test_tid();
+
+    if (shim_api == NULL || shim_api->itempointer_get_offset_number == NULL)
+        ereport(ERROR, (errmsg("kwabi: itempointer_get_offset_number is not wired")));
+    PG_RETURN_BOOL(shim_api->itempointer_get_offset_number(&tid) == KWABI_TID_OFFSET);
+}
+
+PG_FUNCTION_INFO_V1(kwabi_itempointer_is_valid_test);
+
+Datum
+kwabi_itempointer_is_valid_test(PG_FUNCTION_ARGS)
+{
+    ItemPointerData tid = kwabi_test_tid();
+    ItemPointerData invalid;
+
+    if (shim_api == NULL || shim_api->itempointer_is_valid == NULL)
+        ereport(ERROR, (errmsg("kwabi: itempointer_is_valid is not wired")));
+    ItemPointerSetInvalid(&invalid);
+    PG_RETURN_BOOL(shim_api->itempointer_is_valid(&tid) && !shim_api->itempointer_is_valid(&invalid));
+}
+
+/*
+ * kwabi_block_get_number_test() -> bool
+ * kwabi_block_get_offset_test() -> bool
+ * kwabi_block_is_valid_test() -> bool
+ *
+ * The block slots are the same accessors under their other name. They are
+ * tested separately so each slot in the header has a check of its own.
+ */
+PG_FUNCTION_INFO_V1(kwabi_block_get_number_test);
+
+Datum
+kwabi_block_get_number_test(PG_FUNCTION_ARGS)
+{
+    ItemPointerData tid = kwabi_test_tid();
+
+    if (shim_api == NULL || shim_api->block_get_number == NULL)
+        ereport(ERROR, (errmsg("kwabi: block_get_number is not wired")));
+    PG_RETURN_BOOL(shim_api->block_get_number(&tid) == KWABI_TID_BLOCK);
+}
+
+PG_FUNCTION_INFO_V1(kwabi_block_get_offset_test);
+
+Datum
+kwabi_block_get_offset_test(PG_FUNCTION_ARGS)
+{
+    ItemPointerData tid = kwabi_test_tid();
+
+    if (shim_api == NULL || shim_api->block_get_offset == NULL)
+        ereport(ERROR, (errmsg("kwabi: block_get_offset is not wired")));
+    PG_RETURN_BOOL(shim_api->block_get_offset(&tid) == KWABI_TID_OFFSET);
+}
+
+PG_FUNCTION_INFO_V1(kwabi_block_is_valid_test);
+
+Datum
+kwabi_block_is_valid_test(PG_FUNCTION_ARGS)
+{
+    ItemPointerData tid = kwabi_test_tid();
+    ItemPointerData invalid;
+
+    if (shim_api == NULL || shim_api->block_is_valid == NULL)
+        ereport(ERROR, (errmsg("kwabi: block_is_valid is not wired")));
+    ItemPointerSetInvalid(&invalid);
+    PG_RETURN_BOOL(shim_api->block_is_valid(&tid) && !shim_api->block_is_valid(&invalid));
 }

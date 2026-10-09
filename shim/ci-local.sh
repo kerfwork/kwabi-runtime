@@ -138,6 +138,15 @@ FAIL=0
 SKIP=0
 declare -a RESULTS
 
+# unexpected_errors <log>: ERROR lines that are not a deliberate control's raise.
+# A stage whose SQL hit a missing function, or any other error, must FAIL even
+# when its counted assertions pass; psql keeps going past errors (ON_ERROR_STOP
+# is off, because the controls raise by design).
+unexpected_errors() {
+    grep "ERROR:" "$1" | grep -v -e "fired as intended" -e "deliberate proof error" \
+        -e "was not declared" -e "declared with 16 buffers" | wc -l | tr -d ' '
+}
+
 record() {  # record <status> <major> <what>
     RESULTS+=("$(printf '%-4s %-4s %s' "$1" "$2" "$3")")
     case "$1" in
@@ -414,7 +423,8 @@ for M in "${MAJORS[@]}"; do
 
     # 4 undone-work results: check 3, 7, 8's 20-try loop, and check 9.
     if [ "$TRY_UNDONE" -ge 3 ] && [ "$TRY_OK" -ge 1 ] && \
-       [ "$TRY_NESTED" -ge 1 ] && [ "$TRY_RAISED" -ge 1 ] && [ "$TRY_LEAK" -eq 0 ]; then
+       [ "$TRY_NESTED" -ge 1 ] && [ "$TRY_RAISED" -ge 1 ] && [ "$TRY_LEAK" -eq 0 ] && \
+       [ "$(unexpected_errors "$OUT")" -eq 0 ]; then
         record PASS "$M" "error firewall green"
     else
         record FAIL "$M" "try: undone=$TRY_UNDONE ok=$TRY_OK nested=$TRY_NESTED raised=$TRY_RAISED leaked=$TRY_LEAK"
@@ -441,7 +451,8 @@ for M in "${MAJORS[@]}"; do
     # status=2 twice (check 3 and check 5), the backend alive after each, and
     # the transaction usable. A crash here means the macro did not contain.
     if [ "$GUARD_PANIC" -ge 2 ] && [ "$GUARD_ALIVE" -ge 1 ] && \
-       [ "$GUARD_TXN" -ge 1 ] && [ "$GUARD_CRASH" -eq 0 ]; then
+       [ "$GUARD_TXN" -ge 1 ] && [ "$GUARD_CRASH" -eq 0 ] && \
+       [ "$(unexpected_errors "$OUT")" -eq 0 ]; then
         record PASS "$M" "panic containment green"
     else
         record FAIL "$M" "guard: panicked=$GUARD_PANIC alive=$GUARD_ALIVE txn=$GUARD_TXN crash=$GUARD_CRASH"
@@ -469,7 +480,7 @@ for M in "${MAJORS[@]}"; do
     CAP_ATOMIC=$(grep -A2 'atomic_body_true' "$OUT" | grep -cE '^ t')
     CAP_UNDEF=$(grep -A2 'no_undefined_bits' "$OUT" | grep -cE '^ t')
 
-    if [ "$CAP_FALSE" -eq 0 ] && [ "$CAP_CORE" -ge 1 ] && \
+    if [ "$CAP_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$CAP_CORE" -ge 1 ] && \
        [ "$CAP_ATOMIC" -ge 1 ] && [ "$CAP_UNDEF" -ge 1 ]; then
         record PASS "$M" "capability bitset honest ($CAP_TRUE assertions)"
     else
@@ -496,7 +507,7 @@ for M in "${MAJORS[@]}"; do
     TYPE_SEND=$(grep -A2 'type_send_int4' "$OUT" | grep -cE '^ t')
     TYPE_RECV=$(grep -A2 'type_recv_int4' "$OUT" | grep -cE '^ t')
 
-    if [ "$TYPE_FALSE" -eq 0 ] && [ "$TYPE_LEN" -ge 1 ] && \
+    if [ "$TYPE_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$TYPE_LEN" -ge 1 ] && \
        [ "$TYPE_ARR" -ge 1 ] && [ "$TYPE_IN" -ge 1 ] && [ "$TYPE_OUT" -ge 1 ] && \
        [ "$TYPE_SEND" -ge 1 ] && [ "$TYPE_RECV" -ge 1 ]; then
         record PASS "$M" "type-api green ($TYPE_TRUE assertions)"
@@ -533,7 +544,7 @@ for M in "${MAJORS[@]}"; do
     CC_AGREE=$(grep -A2 'paths_agree' "$OUT" | grep -cE '^ t')
     CC_REFUSED=$(grep -A2 'refused_when_unguaranteed' "$OUT" | grep -cE '^ t')
 
-    if [ "$CC_FALSE" -eq 0 ] && [ "$CC_REACHED" -ge 1 ] && \
+    if [ "$CC_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$CC_REACHED" -ge 1 ] && \
        [ "$CC_AGREE" -ge 1 ] && [ "$CC_REFUSED" -ge 1 ]; then
         record PASS "$M" "capabilities consumed by an extension ($CC_TRUE assertions)"
     else
@@ -565,7 +576,7 @@ for M in "${MAJORS[@]}"; do
     MEM_IN_TXN=$(grep -A2 'in_transaction' "$OUT" | grep -cE '^ t')
     MEM_AFTER=$(grep -A2 'after_control' "$OUT" | grep -cE '^ t')
 
-    if [ "$MEM_FALSE" -eq 0 ] && [ "$MEM_CONTROL" -ge 1 ] && \
+    if [ "$MEM_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$MEM_CONTROL" -ge 1 ] && \
        [ "$MEM_LIFECYCLE" -ge 1 ] && [ "$MEM_IN_TXN" -ge 1 ] && \
        [ "$MEM_AFTER" -ge 1 ]; then
         record PASS "$M" "mem-api lifecycle green ($MEM_TRUE assertions)"
@@ -609,7 +620,7 @@ for M in "${MAJORS[@]}"; do
     # other assertion here would still pass.
     FMGR_NOSURVIVOR=$(grep -A2 'no_partial_work_survived' "$OUT" | grep -cE '^ t')
 
-    if [ "$FMGR_FALSE" -eq 0 ] && [ "$FMGR_CONTROL" -ge 1 ] && \
+    if [ "$FMGR_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$FMGR_CONTROL" -ge 1 ] && \
        [ "$FMGR_ONENULL" -ge 1 ] && [ "$FMGR_ERRCODE" -ge 1 ] && \
        [ "$FMGR_ONEARG" -ge 1 ] && [ "$FMGR_NOSURVIVOR" -ge 1 ]; then
         record PASS "$M" "fmgr-api green ($FMGR_TRUE assertions)"
@@ -641,7 +652,7 @@ for M in "${MAJORS[@]}"; do
     GUC_SET=$(grep -A2 'set_and_read_back' "$OUT" | grep -cE '^ t')
     GUC_BOOL=$(grep -A2 'bool_guc_read' "$OUT" | grep -cE '^ t')
 
-    if [ "$GUC_FALSE" -eq 0 ] && [ "$GUC_CONTROL" -ge 1 ] && \
+    if [ "$GUC_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$GUC_CONTROL" -ge 1 ] && \
        [ "$GUC_INT" -ge 1 ] && [ "$GUC_SET" -ge 1 ] && \
        [ "$GUC_BOOL" -ge 1 ]; then
         record PASS "$M" "guc-api green ($GUC_TRUE assertions)"
@@ -671,7 +682,7 @@ for M in "${MAJORS[@]}"; do
     DEFREM_LIFECYCLE=$(grep -A2 'defrem_lifecycle' "$OUT" | grep -cE '^ t')
     DEFREM_ALIVE=$(grep -A2 'still_alive' "$OUT" | grep -cE '^ t')
 
-    if [ "$DEFREM_FALSE" -eq 0 ] && [ "$DEFREM_CONTROL" -ge 1 ] && \
+    if [ "$DEFREM_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$DEFREM_CONTROL" -ge 1 ] && \
        [ "$DEFREM_LIFECYCLE" -ge 1 ] && [ "$DEFREM_ALIVE" -ge 1 ]; then
         record PASS "$M" "defrem-api green ($DEFREM_TRUE assertions)"
     else
@@ -702,7 +713,7 @@ for M in "${MAJORS[@]}"; do
     SPI_INSERT=$(grep -A2 'insert_then_select' "$OUT" | grep -cE '^ t')
     SPI_WRITE=$(grep -A2 'write_visible' "$OUT" | grep -cE '^ t')
 
-    if [ "$SPI_FALSE" -eq 0 ] && [ "$SPI_CONTROL" -ge 1 ] && \
+    if [ "$SPI_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$SPI_CONTROL" -ge 1 ] && \
        [ "$SPI_SELECT" -ge 1 ] && [ "$SPI_INSERT" -ge 1 ] && \
        [ "$SPI_WRITE" -ge 1 ]; then
         record PASS "$M" "spi-api green ($SPI_TRUE assertions)"
@@ -733,7 +744,7 @@ for M in "${MAJORS[@]}"; do
     PARSER_TYPE=$(grep -A2 'parse_type_works' "$OUT" | grep -cE '^ t')
     PARSER_OPER=$(grep -A2 'oper_left_type_int4' "$OUT" | grep -cE '^ t')
 
-    if [ "$PARSER_FALSE" -eq 0 ] && [ "$PARSER_CONTROL" -ge 1 ] && \
+    if [ "$PARSER_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$PARSER_CONTROL" -ge 1 ] && \
        [ "$PARSER_EXPR" -ge 1 ] && [ "$PARSER_TYPE" -ge 1 ] && \
        [ "$PARSER_OPER" -ge 1 ]; then
         record PASS "$M" "parser-api green ($PARSER_TRUE assertions)"
@@ -767,7 +778,7 @@ for M in "${MAJORS[@]}"; do
     # Any ERROR other than the control's own raise is a check that did not run.
     NT_ERR=$(grep -E "ERROR:" "$OUT" | grep -vc "node tree negative control fired as intended" || true)
 
-    if [ "$NT_FALSE" -eq 0 ] && [ "$NT_CONTROL" -ge 1 ] && [ "$NT_ERR" -eq 0 ] && \
+    if [ "$NT_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$NT_CONTROL" -ge 1 ] && [ "$NT_ERR" -eq 0 ] && \
        [ "$NT_TYPE" -ge 1 ] && [ "$NT_NAME" -ge 1 ] && [ "$NT_CMD" -ge 1 ]; then
         record PASS "$M" "node-tree-api green ($NT_TRUE assertions)"
     else
@@ -799,12 +810,12 @@ for M in "${MAJORS[@]}"; do
     TUPLE_HEAP=$(grep -A2 'heap_tuple_accessors' "$OUT" | grep -cE '^ t')
     TUPLE_SLOT=$(grep -A2 'slot_accessors' "$OUT" | grep -cE '^ t')
 
-    if [ "$TUPLE_FALSE" -eq 0 ] && [ "$TUPLE_CONTROL" -ge 1 ] && \
+    if [ "$TUPLE_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$TUPLE_CONTROL" -ge 1 ] && \
        [ "$TUPLE_DESC" -ge 1 ] && [ "$TUPLE_HEAP" -ge 1 ] && \
        [ "$TUPLE_SLOT" -ge 1 ]; then
         record PASS "$M" "tuple-api green ($TUPLE_TRUE assertions)"
     else
-        record FAIL "$M" "tuple-api: true=$TUPLE_TRUE false=$TUPLE_FALSE control=$TUPLE_CONTROL desc=$TUPLE_DESC heap=$TUPLE_HEAP slot=$TUPLE_SLOT"
+        record FAIL "$M" "tuple-api: true=$TUPLE_TRUE false=$TUPLE_FALSE errors=$(unexpected_errors "$OUT") control=$TUPLE_CONTROL desc=$TUPLE_DESC heap=$TUPLE_HEAP slot=$TUPLE_SLOT"
         echo "      see $OUT"
     fi
 
@@ -831,7 +842,7 @@ for M in "${MAJORS[@]}"; do
     REL_ID=$(grep -A2 'relation_id' "$OUT" | grep -cE '^ t')
     REL_KIND=$(grep -A2 'rel_relkind' "$OUT" | grep -cE '^ t')
 
-    if [ "$REL_FALSE" -eq 0 ] && [ "$REL_CONTROL" -ge 1 ] && \
+    if [ "$REL_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$REL_CONTROL" -ge 1 ] && \
        [ "$REL_OPEN" -ge 1 ] && [ "$REL_ID" -ge 1 ] && [ "$REL_KIND" -ge 1 ]; then
         record PASS "$M" "relation-api green ($REL_TRUE assertions)"
     else
@@ -863,7 +874,7 @@ for M in "${MAJORS[@]}"; do
     BUF_LWLOCK=$(grep -A2 'lwlock_lifecycle' "$OUT" | grep -cE '^ t')
     BUF_SPIN=$(grep -A2 'spinlock_lifecycle' "$OUT" | grep -cE '^ t')
 
-    if [ "$BUF_FALSE" -eq 0 ] && [ "$BUF_CONTROL" -ge 1 ] && \
+    if [ "$BUF_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$BUF_CONTROL" -ge 1 ] && \
        [ "$BUF_MGR" -ge 1 ] && [ "$BUF_LWLOCK" -ge 1 ] && \
        [ "$BUF_SPIN" -ge 1 ]; then
         record PASS "$M" "buffer-lock-api green ($BUF_TRUE assertions)"
@@ -892,7 +903,7 @@ for M in "${MAJORS[@]}"; do
     # The one that carries the meaning.
     LOCK_LIFECYCLE=$(grep -A2 'lock_lifecycle' "$OUT" | grep -cE '^ t')
 
-    if [ "$LOCK_FALSE" -eq 0 ] && [ "$LOCK_CONTROL" -ge 1 ] && \
+    if [ "$LOCK_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$LOCK_CONTROL" -ge 1 ] && \
        [ "$LOCK_LIFECYCLE" -ge 1 ]; then
         record PASS "$M" "lock-api green ($LOCK_TRUE assertions)"
     else
@@ -921,7 +932,7 @@ for M in "${MAJORS[@]}"; do
     # The one that carries the meaning.
     SI_BASIC=$(grep -A2 'stringinfo_basic' "$OUT" | grep -cE '^ t')
 
-    if [ "$SI_FALSE" -eq 0 ] && [ "$SI_CONTROL" -ge 1 ] && \
+    if [ "$SI_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$SI_CONTROL" -ge 1 ] && \
        [ "$SI_BASIC" -ge 1 ]; then
         record PASS "$M" "stringinfo-api green ($SI_TRUE assertions)"
     else
@@ -949,7 +960,7 @@ for M in "${MAJORS[@]}"; do
     # The one that carries the meaning.
     SH_BASIC=$(grep -A2 'shmem_basic' "$OUT" | grep -cE '^ t')
 
-    if [ "$SH_FALSE" -eq 0 ] && [ "$SH_CONTROL" -ge 1 ] && \
+    if [ "$SH_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$SH_CONTROL" -ge 1 ] && \
        [ "$SH_BASIC" -ge 1 ]; then
         record PASS "$M" "shmem-api green ($SH_TRUE assertions)"
     else
@@ -977,7 +988,7 @@ for M in "${MAJORS[@]}"; do
     # The one that carries the meaning.
     SC_BASIC=$(grep -A2 'syscache_basic' "$OUT" | grep -cE '^ t')
 
-    if [ "$SC_FALSE" -eq 0 ] && [ "$SC_CONTROL" -ge 1 ] && \
+    if [ "$SC_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$SC_CONTROL" -ge 1 ] && \
        [ "$SC_BASIC" -ge 1 ]; then
         record PASS "$M" "syscache-api green ($SC_TRUE assertions)"
     else
@@ -1005,7 +1016,7 @@ for M in "${MAJORS[@]}"; do
     # The one that carries the meaning.
     EX_BASIC=$(grep -A2 'extension_basic' "$OUT" | grep -cE '^ t')
 
-    if [ "$EX_FALSE" -eq 0 ] && [ "$EX_CONTROL" -ge 1 ] && \
+    if [ "$EX_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$EX_CONTROL" -ge 1 ] && \
        [ "$EX_BASIC" -ge 1 ]; then
         record PASS "$M" "extension-api green ($EX_TRUE assertions)"
     else
@@ -1039,7 +1050,7 @@ for M in "${MAJORS[@]}"; do
     TXN_LIFECYCLE=$(grep -A2 'transaction_lifecycle' "$OUT" | grep -cE '^ t')
     TXN_PURE=$(grep -A2 'unassigned_xid_is_zero' "$OUT" | grep -cE '^ t')
 
-    if [ "$TXN_FALSE" -eq 0 ] && [ "$TXN_CONTROL" -ge 1 ] && \
+    if [ "$TXN_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$TXN_CONTROL" -ge 1 ] && \
        [ "$TXN_LIFECYCLE" -ge 1 ] && [ "$TXN_PURE" -ge 1 ]; then
         record PASS "$M" "transaction-api green ($TXN_TRUE assertions)"
     else
@@ -1068,7 +1079,7 @@ for M in "${MAJORS[@]}"; do
     # The one that carries the meaning.
     EXEC_LIFECYCLE=$(grep -A2 'executor_lifecycle' "$OUT" | grep -cE '^ t')
 
-    if [ "$EXEC_FALSE" -eq 0 ] && [ "$EXEC_CONTROL" -ge 1 ] && \
+    if [ "$EXEC_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$EXEC_CONTROL" -ge 1 ] && \
        [ "$EXEC_LIFECYCLE" -ge 1 ]; then
         record PASS "$M" "executor-api green ($EXEC_TRUE assertions)"
     else
@@ -1095,7 +1106,7 @@ for M in "${MAJORS[@]}"; do
     # The one that carries the meaning.
     EXP_INDEX=$(grep -A2 'index_name' "$OUT" | grep -cE '^ t')
 
-    if [ "$EXP_FALSE" -eq 0 ] && [ "$EXP_CONTROL" -ge 1 ] && \
+    if [ "$EXP_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$EXP_CONTROL" -ge 1 ] && \
        [ "$EXP_INDEX" -ge 1 ]; then
         record PASS "$M" "explain-api green ($EXP_TRUE assertions)"
     else
@@ -1125,7 +1136,7 @@ for M in "${MAJORS[@]}"; do
     # The one that carries the meaning.
     BG_LIFECYCLE=$(grep -A2 'bgworker_lifecycle' "$OUT" | grep -cE '^ t')
 
-    if [ "$BG_FALSE" -eq 0 ] && [ "$BG_CONTROL" -ge 1 ] && \
+    if [ "$BG_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$BG_CONTROL" -ge 1 ] && \
        [ "$BG_LIFECYCLE" -ge 1 ]; then
         record PASS "$M" "bgworker-api green ($BG_TRUE assertions)"
     else
@@ -1208,7 +1219,7 @@ for M in "${MAJORS[@]}"; do
         SLRU_RT=$(grep -A2 'read_back_matches' "$OUT" | grep -cE '^ t')
         SLRU_CAPBIT=$(grep -A2 'slru_bit_set_when_preloaded' "$OUT" | grep -cE '^ t')
 
-        if [ "$SLRU_FALSE" -eq 0 ] && [ "$SLRU_CTL1" -ge 1 ] && \
+        if [ "$SLRU_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$SLRU_CTL1" -ge 1 ] && \
            [ "$SLRU_CTL2" -ge 1 ] && [ "$SLRU_RT" -ge 1 ] && \
            [ "$SLRU_CAPBIT" -ge 1 ]; then
             record PASS "$M" "slru-api green ($SLRU_TRUE assertions, preload cluster)"
