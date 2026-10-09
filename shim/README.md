@@ -172,14 +172,15 @@ PostgreSQL confirms the result is its own memory.
 
 The extension has no idea which server it is in. That is the point.
 
-## The shim is one file, not one per version
+## The shim is one source tree, not one per version
 
-`kwabi_runtime_shim.c` compiles for both 17 and 18. Only the *build* differs
+The shim sources (`kwabi_runtime_shim.c`, `shim_internal.h` and the `group_*.c`
+files) compile for both 17 and 18. Only the *build* differs
 (`pg_config`, hence `PGINC` and `PKGLIBDIR`); the source is shared. A copy per
 version would drift silently, so version differences live in `#if` guards
 marked `VERSION-DIFF` for one-grep discoverability.
 
-The complete set of differences between 17 and 18 in this file:
+The complete set of differences between 17 and 18 in the shim sources:
 
 | Difference | Guard |
 |---|---|
@@ -303,7 +304,9 @@ PostgreSQL's own name.
 
 | File | Role |
 |---|---|
-| `kwabi_runtime_shim.c` | the shim: one file, both versions, `VERSION-DIFF` guards |
+| `kwabi_runtime_shim.c` | `_PG_init`, and the proof functions for the original groups |
+| `shim_internal.h` | shared includes and the `VERSION-DIFF` guards |
+| `group_*.c` | one file per slot group, each with its `init_group_*` wiring (e.g. `group_executor.c`) |
 | `proof.sql` | the 13 checks; takes bundle/canary/libdir as psql variables |
 | `capabilities.sql` | the bitset must be honest (runtime side) |
 | `capability-consumer.sql` | the bitset must be reachable and branched on (extension side) |

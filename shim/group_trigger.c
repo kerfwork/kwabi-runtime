@@ -1,14 +1,16 @@
 /* group_trigger.c — trigger slots for the kwabi shim */
 
 #include "shim_internal.h"
+#include "commands/trigger.h"        /* CopyTriggerDesc */
 #include "executor/spi.h"           /* SPI_connect, SPI_execute */
 #include "utils/builtins.h"         /* DatumGetObjectId */
 
 /*
- * The trigger handles are opaque at the ABI. A KwabiTriggerDesc is the
- * relcache's TriggerDesc*; a KwabiTrigger points into that desc's array. Both
- * stay valid while the relation stays in the relcache, which is the lifetime
- * the caller already has to respect for any relation-derived handle.
+ * The trigger handles are opaque at the ABI. trigger_desc returns a COPY of
+ * the relcache TriggerDesc, made in the caller's current memory context, so
+ * the handle outlives the relation open/close and an ALTER or DROP of the
+ * relation cannot leave it pointing at freed memory. A KwabiTrigger points
+ * into that copy, so it lives as long as the desc.
  */
 
 /* ---- trigger slots --------------------------------------------------- */
@@ -17,9 +19,9 @@ KwabiTriggerDesc
 shim_trigger_desc(Oid relid)
 {
     Relation rel = relation_open(relid, AccessShareLock);
-    TriggerDesc *desc = rel->trigdesc;
+    TriggerDesc *copy = CopyTriggerDesc(rel->trigdesc);
     relation_close(rel, AccessShareLock);
-    return (KwabiTriggerDesc) desc;
+    return (KwabiTriggerDesc) copy;
 }
 
 int
