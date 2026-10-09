@@ -263,8 +263,8 @@ explain_abi_matches_sql(const char *sql, bool analyze)
     SPI_finish();
 
     if (strcmp(from_abi, from_sql.data) != 0)
-        ereport(NOTICE, (errmsg("explain mismatch (analyze=%d)", (int) analyze),
-                         errdetail("abi: [%s] sql: [%s]", from_abi, from_sql.data)));
+        ereport(NOTICE, (errmsg("explain mismatch (analyze=%d) abi=[%s] sql=[%s]",
+                                (int) analyze, from_abi, from_sql.data)));
     return strcmp(from_abi, from_sql.data) == 0;
 }
 
