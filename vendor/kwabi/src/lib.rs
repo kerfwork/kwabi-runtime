@@ -40,6 +40,7 @@
 //! ```
 
 pub mod guarded;
+pub mod raw;
 
 /// Re-export the `#[guarded_body]` attribute macro.
 pub use kwabi_macros::{guarded_body, require_unwind};
@@ -523,6 +524,12 @@ impl std::error::Error for KwabiError {}
 impl Kwabi {
     /// Create a new Kwabi instance from the function table.
     ///
+    /// Every ABI slot except the transactions API, one unsafe method each.
+    /// See `raw` for why these are unsafe and how they are generated.
+    pub fn raw(&self) -> raw::Raw<'_> {
+        raw::Raw::new(self.api)
+    }
+
     /// This is called by the runtime at load time. Extensions should not
     /// call this directly.
     pub fn from_api(api: &'static KwabiV1) -> Self {
@@ -1297,6 +1304,31 @@ pub mod nightly {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The generated raw layer must expose exactly the header's slots, minus the
+    // transactions API. A header change without regenerating raw.rs fails here.
+    #[test]
+    fn raw_layer_matches_header_slots() {
+        let header = include_str!("../include/kwabi.h");
+        let start = header
+            .find("typedef struct KwabiV1 {")
+            .expect("KwabiV1 in header");
+        let end = header[start..].find("} KwabiV1;").expect("end of KwabiV1") + start;
+        let mut expected: Vec<&str> = header[start..end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with(['*', '/']))
+            .flat_map(|l| l.split("(*").skip(1))
+            .filter_map(|rest| rest.split(')').next())
+            .filter(|name| !name.starts_with("transaction_"))
+            .collect();
+        let mut got: Vec<&str> = raw::SLOTS.to_vec();
+        expected.sort_unstable();
+        got.sort_unstable();
+        assert_eq!(
+            got, expected,
+            "raw.rs is stale: regenerate with tools/gen_raw.py"
+        );
+    }
 
     // The SDK mirror of KwabiV1 must have exactly the slots the header declares.
     // Every slot is one pointer, and `version` is a u32 padded to pointer size.
