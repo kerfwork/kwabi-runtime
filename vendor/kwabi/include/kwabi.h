@@ -112,7 +112,11 @@ extern "C" {
  * with hook_bind_extension, without a server restart. It holds only when the runtime
  * is preloaded (shared memory exists), so it is not derivable from the slot. A
  * replaced body runs from its new library image; statics in the old image are not
- * carried over, and a new image needs a new file name. */
+ * carried over, and a new image needs a new file name.
+ *
+ * Reload rule: a body change is picked up by hook_bind_extension and needs no restart.
+ * A change to the runtime itself needs a postmaster restart, because the runtime is
+ * preloaded and its code is mapped once per server. */
 #define KWABI_CAP_HOOK_RELOAD              (1ULL << 7)
 
 /* Every defined bit, for a runtime that supports the lot. */
