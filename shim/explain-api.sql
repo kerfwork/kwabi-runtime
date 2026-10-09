@@ -85,4 +85,11 @@ SELECT kwabi_explain_analyze_matches_sql_test('SELECT v FROM kwabi_explain_t') A
 \echo '=== 7. version-specific options are accepted only on the majors that have them ==='
 SELECT kwabi_explain_option_version_test() AS explain_option_version;
 
+DROP FUNCTION IF EXISTS kwabi_explain_format_test();
+CREATE FUNCTION kwabi_explain_format_test()
+    RETURNS bool AS :'bundle','kwabi_explain_format_test' LANGUAGE C;
+
+\echo '=== explain_format: explain_state_set_format: JSON output; an unknown format raises ==='
+SELECT kwabi_explain_format_test() AS explain_format;
+
 \echo '=== explain-api tests complete ==='

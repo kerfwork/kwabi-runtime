@@ -175,23 +175,44 @@ shim_memory_context_create(const char *name)
 
 /* ---- native error/log functions -------------------------------------- */
 
+/*
+ * The legacy error slots read the buffer error_get reads, the one the shim
+ * fills in shim_capture_error. error_message returns a static copy, valid until
+ * the next call. error_clear writes an empty error into the buffer.
+ */
+static KwabiError
+native_last_error(void)
+{
+    KwabiError err;
+
+    kwabi_error_init(&err);
+    kwabi_error_get(&err);
+    return err;
+}
+
 static const char *
 native_error_message(void)
 {
-    return "postgres: see ErrorData";
+    static char message[KWABI_ERRMSG_MAX];
+    KwabiError  err = native_last_error();
+
+    snprintf(message, sizeof(message), "%s", err.message);
+    return message;
 }
 
 static int
 native_error_code(void)
 {
-    return geterrcode();
+    return native_last_error().sqlerrcode;
 }
 
 static void
 native_error_clear(void)
 {
-    /* PostgreSQL clears its error state at transaction boundaries; there is
-     * nothing useful to do here without an active ErrorData. */
+    KwabiError err;
+
+    kwabi_error_init(&err);
+    kwabi_error_set(&err);
 }
 
 static void
@@ -4571,4 +4592,83 @@ kwabi_plan_has_modifying_cte(PG_FUNCTION_ARGS)
     KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_has_modifying_cte == NULL);
     KwabiNode plan = kwabi_test_plan(PG_GETARG_TEXT_PP(0));
     PG_RETURN_BOOL(shim_api->planned_stmt_has_modifying_cte(plan));
+}
+
+/*
+ * kwabi_error_slots_test() -> bool
+ *
+ * An error the shim captured must read back through error_message and
+ * error_code, and error_clear must empty it.
+ */
+PG_FUNCTION_INFO_V1(kwabi_error_slots_test);
+
+Datum
+kwabi_error_slots_test(PG_FUNCTION_ARGS)
+{
+    bool ok = false;
+
+    if (shim_api == NULL || shim_api->error_message == NULL ||
+        shim_api->error_code == NULL || shim_api->error_clear == NULL)
+        ereport(ERROR, (errmsg("kwabi: error slots are not wired")));
+
+    PG_TRY();
+    {
+        ereport(ERROR, (errcode(ERRCODE_DIVISION_BY_ZERO),
+                        errmsg("kwabi error slot probe")));
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+    }
+    PG_END_TRY();
+
+    {
+        bool captured = strcmp(shim_api->error_message(), "kwabi error slot probe") == 0;
+        bool coded = shim_api->error_code() == ERRCODE_DIVISION_BY_ZERO;
+
+        shim_api->error_clear();
+        ok = captured && coded &&
+             shim_api->error_code() == 0 &&
+             strlen(shim_api->error_message()) == 0;
+    }
+    PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_palloc0_repalloc_test() -> bool
+ *
+ * palloc0 returns zeroed memory. repalloc keeps the old contents and grows the
+ * block.
+ */
+PG_FUNCTION_INFO_V1(kwabi_palloc0_repalloc_test);
+
+Datum
+kwabi_palloc0_repalloc_test(PG_FUNCTION_ARGS)
+{
+    unsigned char *zeroed;
+    unsigned char *grown;
+    bool           ok = true;
+    int            i;
+
+    if (shim_api == NULL || shim_api->palloc0 == NULL || shim_api->repalloc == NULL ||
+        shim_api->pfree == NULL)
+        ereport(ERROR, (errmsg("kwabi: memory slots are not wired")));
+
+    zeroed = (unsigned char *) shim_api->palloc0(64);
+    for (i = 0; i < 64; i++)
+        if (zeroed[i] != 0)
+            ok = false;
+
+    zeroed = (unsigned char *) shim_api->repalloc(zeroed, 16);
+    for (i = 0; i < 16; i++)
+        zeroed[i] = (unsigned char) (0xA0 + i);
+
+    grown = (unsigned char *) shim_api->repalloc(zeroed, 8192);
+    for (i = 0; i < 16; i++)
+        if (grown[i] != (unsigned char) (0xA0 + i))
+            ok = false;
+    grown[8191] = 1;
+
+    shim_api->pfree(grown);
+    PG_RETURN_BOOL(ok);
 }

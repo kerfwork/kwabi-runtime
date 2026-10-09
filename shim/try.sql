@@ -99,4 +99,11 @@ SELECT count(*) AS client_backends FROM pg_stat_activity
 DROP TABLE IF EXISTS kwabi_t;
 
 \echo ''
+DROP FUNCTION IF EXISTS kwabi_error_slots_test();
+CREATE FUNCTION kwabi_error_slots_test()
+    RETURNS bool AS :'bundle','kwabi_error_slots_test' LANGUAGE C;
+
+\echo '=== error_slots: error_message/error_code read the captured error; error_clear empties it ==='
+SELECT kwabi_error_slots_test() AS error_slots;
+
 \echo '=== proof complete ==='

@@ -1434,3 +1434,63 @@ kwabi_reorderbuffer_get_lsn_test(PG_FUNCTION_ARGS)
 
     PG_RETURN_BOOL(slot_raises_not_supported(call_reorderbuffer_get_lsn));
 }
+
+/* ---- proof functions for node_get_list and the two stub slots -------- */
+
+/*
+ * kwabi_node_get_list_test() -> bool
+ *
+ * node_get_list on a parsed SELECT returns its target list, of two entries
+ * for "SELECT 1, 2". A NULL node gives NULL.
+ */
+PG_FUNCTION_INFO_V1(kwabi_node_get_list_test);
+
+Datum
+kwabi_node_get_list_test(PG_FUNCTION_ARGS)
+{
+    KwabiNode node;
+    KwabiList list;
+    bool      ok;
+
+    if (shim_api == NULL || shim_api->node_get_list == NULL ||
+        shim_api->node_list_length == NULL || shim_api->parse_stmt == NULL)
+        ereport(ERROR, (errmsg("kwabi: node_get_list is not wired")));
+
+    node = shim_api->parse_stmt("SELECT 1, 2");
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+    list = shim_api->node_get_list(node);
+    ok = (list != NULL && shim_api->node_list_length((KwabiNode) list) == 2);
+    ok = ok && (shim_api->node_get_list(NULL) == NULL);
+    PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_logical_decoding_read_test() -> bool
+ * kwabi_reorderbuffer_get_xid_test() -> bool
+ *
+ * Both raise "not supported by this shim", as the other logical decoding and
+ * reorderbuffer slots do. Each must raise, not return a value.
+ */
+static void call_logical_decoding_read(void) { int64 lsn = 0; (void) shim_api->logical_decoding_read(NULL, &lsn, NULL); }
+static void call_reorderbuffer_get_xid(void) { (void) shim_api->reorderbuffer_get_xid(NULL, InvalidTransactionId); }
+
+PG_FUNCTION_INFO_V1(kwabi_logical_decoding_read_test);
+
+Datum
+kwabi_logical_decoding_read_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->logical_decoding_read == NULL)
+        ereport(ERROR, (errmsg("kwabi: logical_decoding_read is not wired")));
+    PG_RETURN_BOOL(slot_raises_not_supported(call_logical_decoding_read));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_reorderbuffer_get_xid_test);
+
+Datum
+kwabi_reorderbuffer_get_xid_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->reorderbuffer_get_xid == NULL)
+        ereport(ERROR, (errmsg("kwabi: reorderbuffer_get_xid is not wired")));
+    PG_RETURN_BOOL(slot_raises_not_supported(call_reorderbuffer_get_xid));
+}

@@ -144,6 +144,8 @@ pub struct KwabiV1 {
     pub spi_execute_plan: Option<
         unsafe extern "C" fn(*mut c_void, *mut usize, *const c_char, bool, c_int) -> *mut c_void,
     >,
+    pub spi_prepare: Option<unsafe extern "C" fn(*const c_char, c_int, *mut u32) -> *mut c_void>,
+    pub spi_free_plan: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub spi_free_result: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub spi_result_ntuples: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     pub spi_result_get_value: Option<unsafe extern "C" fn(*mut c_void, c_int, c_int) -> usize>,
@@ -272,7 +274,7 @@ pub struct KwabiV1 {
     pub slot_isnull: Option<unsafe extern "C" fn(*mut c_void, c_int) -> bool>,
     pub slot_getattr: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut bool) -> usize>,
     pub slot_tupledesc: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
-    pub table_am_get: Option<unsafe extern "C" fn(u32) -> *mut c_void>,
+    pub table_am_get: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
     pub table_am_beginscan:
         Option<unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, *mut c_void) -> *mut c_void>,
     pub table_am_endscan: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
@@ -364,7 +366,7 @@ pub struct KwabiV1 {
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 206;
+    pub const FIELD_COUNT: usize = 208;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -382,6 +384,8 @@ impl Default for KwabiV1 {
             call_function3: None,
             spi_execute: None,
             spi_execute_plan: None,
+            spi_prepare: None,
+            spi_free_plan: None,
             spi_free_result: None,
             spi_result_ntuples: None,
             spi_result_get_value: None,

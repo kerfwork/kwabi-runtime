@@ -71,4 +71,11 @@ SELECT (kwabi_mem_api_test()
         LIKE '%lifecycle verified%') AS after_control;
 
 \echo ''
+DROP FUNCTION IF EXISTS kwabi_palloc0_repalloc_test();
+CREATE FUNCTION kwabi_palloc0_repalloc_test()
+    RETURNS bool AS :'bundle','kwabi_palloc0_repalloc_test' LANGUAGE C;
+
+\echo '=== palloc0_repalloc: palloc0 zeroes; repalloc keeps contents and grows ==='
+SELECT kwabi_palloc0_repalloc_test() AS palloc0_repalloc;
+
 \echo '=== mem-api tests complete ==='

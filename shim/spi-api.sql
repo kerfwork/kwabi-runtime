@@ -74,4 +74,11 @@ SELECT kwabi_spi_query('SELECT 1') LIKE '%rows=1%' AS in_transaction;
 COMMIT;
 
 \echo ''
+DROP FUNCTION IF EXISTS kwabi_spi_plan_test();
+CREATE FUNCTION kwabi_spi_plan_test()
+    RETURNS bool AS :'bundle','kwabi_spi_plan_test' LANGUAGE C;
+
+\echo '=== spi_plan: spi_prepare + spi_execute_plan + spi_free_plan: a plan with a parameter runs ==='
+SELECT kwabi_spi_plan_test() AS spi_plan;
+
 \echo '=== spi-api tests complete ==='

@@ -5,6 +5,9 @@
 /* shim_internal.h defines QueryEnvironment as void * for the ABI typing. Here
  * the PostgreSQL struct is needed, so drop the macro for this file. */
 #undef QueryEnvironment
+#if PG_VERSION_NUM >= 180000
+#include "commands/explain_format.h"  /* ExplainBeginOutput, ExplainEndOutput */
+#endif
 #include "tcop/dest.h"               /* CreateDestReceiver, DestNone */
 #include "tcop/tcopprot.h"           /* pg_plan_query */
 #include "executor/execdesc.h"       /* CreateQueryDesc, FreeQueryDesc */
@@ -180,6 +183,9 @@ shim_explain_query(KwabiQueryDesc qd, KwabiIntoClause into, KwabiExplainState ha
     if (desc == NULL || es == NULL)
         ereport(ERROR, (errmsg("kwabi: explain_query needs a query and a state")));
 
+    /* Frame the plan the way SQL EXPLAIN does. XML, JSON and YAML need the
+     * output group opened and closed here; for text both calls do nothing. */
+    ExplainBeginOutput(es);
 #if PG_VERSION_NUM >= 170000
     ExplainOnePlan(desc->plannedstmt, (IntoClause *) into, es, queryString,
                    (ParamListInfo) params, (struct QueryEnvironment *) queryEnv,
@@ -189,6 +195,7 @@ shim_explain_query(KwabiQueryDesc qd, KwabiIntoClause into, KwabiExplainState ha
                    (ParamListInfo) params, (struct QueryEnvironment *) queryEnv,
                    NULL, NULL);
 #endif
+    ExplainEndOutput(es);
 }
 
 void
@@ -395,4 +402,58 @@ kwabi_explain_bad_option_test(PG_FUNCTION_ARGS)
     PG_END_TRY();
 
     PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_explain_format_test() -> bool
+ *
+ * JSON format through explain_state_set_format produces JSON, and a format
+ * outside 0..3 raises.
+ */
+PG_FUNCTION_INFO_V1(kwabi_explain_format_test);
+
+Datum
+kwabi_explain_format_test(PG_FUNCTION_ARGS)
+{
+    const char *sql = "SELECT 1";
+    KwabiNode    query;
+    PlannedStmt *pstmt;
+    QueryDesc   *qd;
+    KwabiExplainState es;
+    bool         ok;
+    bool         raised = false;
+
+    if (shim_api == NULL || shim_api->explain_state_set_format == NULL)
+        ereport(ERROR, (errmsg("kwabi: explain_state_set_format is not wired")));
+
+    query = shim_api->parse_stmt(sql);
+    pstmt = pg_plan_query((Query *) query, sql, 0, NULL);
+    qd = CreateQueryDesc(pstmt, sql, GetActiveSnapshot(), InvalidSnapshot,
+                         CreateDestReceiver(DestNone), NULL, NULL, 0);
+
+    es = shim_api->explain_state_new();
+    shim_api->explain_state_set_option(es, "costs", false);
+    shim_api->explain_state_set_format(es, 2);
+    shim_api->explain_query((KwabiQueryDesc) qd, NULL, es, sql, NULL, NULL);
+    ok = (strncmp(shim_api->explain_state_text(es), "[", 1) == 0 &&
+          strstr(shim_api->explain_state_text(es), "\"Node Type\": \"Result\"") != NULL);
+    shim_api->explain_state_free(es);
+    FreeQueryDesc(qd);
+
+    es = shim_api->explain_state_new();
+    PG_TRY();
+    {
+        shim_api->explain_state_set_format(es, 9);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        raised = (strstr(edata->message, "unknown EXPLAIN format") != NULL);
+        FreeErrorData(edata);
+        FlushErrorState();
+    }
+    PG_END_TRY();
+    shim_api->explain_state_free(es);
+
+    PG_RETURN_BOOL(ok && raised);
 }

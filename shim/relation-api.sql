@@ -137,4 +137,11 @@ SELECT kwabi_relation_id_test(1259) = 1259 AS in_transaction;
 COMMIT;
 
 \echo ''
+DROP FUNCTION IF EXISTS kwabi_table_am_test();
+CREATE FUNCTION kwabi_table_am_test()
+    RETURNS bool AS :'bundle','kwabi_table_am_test' LANGUAGE C;
+
+\echo '=== table_am: table AM scan, insert, update, delete through the ABI, checked against SQL ==='
+SELECT kwabi_table_am_test() AS table_am;
+
 \echo '=== relation-api tests complete ==='

@@ -628,6 +628,9 @@ typedef struct KwabiV1 {
     /* ---- SPI ---- */
     KwabiSPIResult (*spi_execute)(const char *sql, bool read_only, int tcount);
     KwabiSPIResult (*spi_execute_plan)(KwabiSPIPlan plan, Datum *values, const char *nulls, bool read_only, int tcount);
+    /* A plan outlives the SPI connection that made it, until spi_free_plan. */
+    KwabiSPIPlan (*spi_prepare)(const char *sql, int nargs, Oid *argtypes);
+    void (*spi_free_plan)(KwabiSPIPlan plan);
     void (*spi_free_result)(KwabiSPIResult result);
     int (*spi_result_ntuples)(KwabiSPIResult result);
     Datum (*spi_result_get_value)(KwabiSPIResult result, int tupno, int attno);
@@ -808,13 +811,15 @@ typedef struct KwabiV1 {
     TupleDesc (*slot_tupledesc)(KwabiSlot slot);
 
     /* ---- Table AM ---- */
-    KwabiTableAm (*table_am_get)(Oid relid);
-    TableScanDesc (*table_am_beginscan)(KwabiTableAm am, KwabiSnapshot snapshot, int nkeys, ScanKey key);
+    /* A table AM handle is a Relation, opened with relation_open. table_am_get
+     * returns that relation's access method routine. */
+    KwabiTableAm (*table_am_get)(KwabiRelation rel);
+    TableScanDesc (*table_am_beginscan)(KwabiRelation rel, KwabiSnapshot snapshot, int nkeys, ScanKey key);
     void (*table_am_endscan)(TableScanDesc scan);
     bool (*table_am_getnext)(TableScanDesc scan, KwabiSlot slot);
-    void (*table_am_insert)(KwabiTableAm am, KwabiSlot slot, int options, BulkInsertState bistate);
-    void (*table_am_update)(KwabiTableAm am, KwabiSlot slot, int options);
-    void (*table_am_delete)(KwabiTableAm am, KwabiSlot slot, int options);
+    void (*table_am_insert)(KwabiRelation rel, KwabiSlot slot, int options, BulkInsertState bistate);
+    void (*table_am_update)(KwabiRelation rel, KwabiSlot slot, int options);
+    void (*table_am_delete)(KwabiRelation rel, KwabiSlot slot, int options);
 
     /* ---- Executor ---- */
     KwabiEState (*executor_start)(KwabiQueryDesc queryDesc, int eflags);
@@ -866,8 +871,9 @@ typedef struct KwabiV1 {
      * An unknown name raises. The version-specific options raise on majors that
      * do not have them.
      *
-     * explain_query runs ExplainOnePlan on the plan in queryDesc. With analyze
-     * set, the plan runs, as it does for SQL EXPLAIN ANALYZE. */
+     * explain_query frames and runs the plan in queryDesc as SQL EXPLAIN does:
+     * XML, JSON and YAML output is a complete document. With analyze set, the
+     * plan runs, as it does for SQL EXPLAIN ANALYZE. */
     void (*explain_query)(KwabiQueryDesc queryDesc, KwabiIntoClause into, KwabiExplainState es, const char *queryString, KwabiParamListInfo params, KwabiQueryEnvironment queryEnv);
     KwabiExplainState (*explain_state_new)(void);
     void (*explain_state_set_option)(KwabiExplainState es, const char *name, bool value);

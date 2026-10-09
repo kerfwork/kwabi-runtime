@@ -217,9 +217,11 @@ fn table_layout_is_stable() {
     // happen by accident. 205 -> 201 when the four impossible transaction
     // boundary slots were removed (pre-release; see kwabi.h Transactions).
     // 201 -> 206 when five ExplainState slots were added (pre-release).
+    // 206 -> 208 when spi_prepare and spi_free_plan were added, after the SPI
+    // execute slots (pre-release). A slot in the middle moves every offset after it.
     assert_eq!(
         KwabiV1::FIELD_COUNT,
-        206,
+        208,
         "field count changed — kwabi.h edited?"
     );
 }

@@ -442,4 +442,23 @@ SELECT kwabi_vacuum_analyze_rel_test() AS vacuum_analyze_rel;
 SELECT kwabi_syslogger_log_test() = true AS syslogger_log;
 
 \echo ''
+DROP FUNCTION IF EXISTS kwabi_node_get_list_test();
+DROP FUNCTION IF EXISTS kwabi_logical_decoding_read_test();
+DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_xid_test();
+CREATE FUNCTION kwabi_node_get_list_test()
+    RETURNS bool AS :'bundle','kwabi_node_get_list_test' LANGUAGE C;
+CREATE FUNCTION kwabi_logical_decoding_read_test()
+    RETURNS bool AS :'bundle','kwabi_logical_decoding_read_test' LANGUAGE C;
+CREATE FUNCTION kwabi_reorderbuffer_get_xid_test()
+    RETURNS bool AS :'bundle','kwabi_reorderbuffer_get_xid_test' LANGUAGE C;
+
+\echo '=== node_get_list: node_get_list returns the target list of SELECT 1, 2; NULL gives NULL ==='
+SELECT kwabi_node_get_list_test() AS node_get_list;
+
+\echo '=== logical_decoding_read: logical_decoding_read raises not supported ==='
+SELECT kwabi_logical_decoding_read_test() AS logical_decoding_read;
+
+\echo '=== reorderbuffer_get_xid: reorderbuffer_get_xid raises not supported ==='
+SELECT kwabi_reorderbuffer_get_xid_test() AS reorderbuffer_get_xid;
+
 \echo '=== node-tree-api tests complete ==='

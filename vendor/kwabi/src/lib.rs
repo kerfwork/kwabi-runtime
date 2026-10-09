@@ -103,6 +103,8 @@ pub struct KwabiV1 {
             i32,
         ) -> *mut KwabiSPIResult,
     >,
+    pub spi_prepare: Option<extern "C" fn(*const c_char, i32, *mut u32) -> *mut KwabiSPIPlan>,
+    pub spi_free_plan: Option<extern "C" fn(*mut KwabiSPIPlan)>,
     pub spi_free_result: Option<unsafe extern "C" fn(*mut KwabiSPIResult)>,
     pub spi_result_ntuples: Option<unsafe extern "C" fn(*mut KwabiSPIResult) -> i32>,
     pub spi_result_get_value: Option<unsafe extern "C" fn(*mut KwabiSPIResult, i32, i32) -> u64>,
@@ -129,7 +131,8 @@ pub struct KwabiV1 {
     pub sequence_nextval: Option<extern "C" fn(u32) -> i64>,
     pub sequence_currval: Option<extern "C" fn(u32) -> i64>,
     pub sequence_setval: Option<extern "C" fn(u32, i64) -> i64>,
-    pub logical_decoding_begin: Option<extern "C" fn(*const c_char, i64) -> *mut KwabiLogicalDecodingCtx>,
+    pub logical_decoding_begin:
+        Option<extern "C" fn(*const c_char, i64) -> *mut KwabiLogicalDecodingCtx>,
     pub logical_decoding_end: Option<extern "C" fn(*mut KwabiLogicalDecodingCtx)>,
     pub logical_decoding_read: Option<
         extern "C" fn(*mut KwabiLogicalDecodingCtx, *mut i64, *mut *mut std::ffi::c_void) -> bool,
@@ -258,10 +261,10 @@ pub struct KwabiV1 {
     pub slot_isnull: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> bool>,
     pub slot_getattr: Option<extern "C" fn(*mut std::ffi::c_void, i32, *mut bool) -> u64>,
     pub slot_tupledesc: Option<extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>,
-    pub table_am_get: Option<extern "C" fn(u32) -> *mut KwabiTableAm>,
+    pub table_am_get: Option<extern "C" fn(*mut std::ffi::c_void) -> *mut KwabiTableAm>,
     pub table_am_beginscan: Option<
         extern "C" fn(
-            *mut KwabiTableAm,
+            *mut std::ffi::c_void,
             *mut std::ffi::c_void,
             i32,
             *mut std::ffi::c_void,
@@ -270,10 +273,11 @@ pub struct KwabiV1 {
     pub table_am_endscan: Option<extern "C" fn(*mut std::ffi::c_void)>,
     pub table_am_getnext:
         Option<extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool>,
-    pub table_am_insert:
-        Option<extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32, *mut std::ffi::c_void)>,
-    pub table_am_update: Option<extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32)>,
-    pub table_am_delete: Option<extern "C" fn(*mut KwabiTableAm, *mut std::ffi::c_void, i32)>,
+    pub table_am_insert: Option<
+        extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, i32, *mut std::ffi::c_void),
+    >,
+    pub table_am_update: Option<extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, i32)>,
+    pub table_am_delete: Option<extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, i32)>,
     pub executor_start: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> *mut KwabiEState>,
     pub executor_run: Option<extern "C" fn(*mut KwabiEState, i32, i64, bool)>,
     pub executor_finish: Option<extern "C" fn(*mut KwabiEState)>,
