@@ -20,11 +20,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `fmgr_info`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn fmgr_info(&self, a0: u32) -> *mut KwabiFmgrInfo {
         (self.api.fmgr_info.expect("fmgr_info"))(a0)
     }
 
     /// Slot `call_function`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn call_function(
         &self,
         a0: *mut KwabiFmgrInfo,
@@ -38,6 +48,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `call_function1`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn call_function1(
         &self,
         a0: *mut KwabiFmgrInfo,
@@ -49,6 +64,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `call_function2`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn call_function2(
         &self,
         a0: *mut KwabiFmgrInfo,
@@ -61,6 +81,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `call_function3`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn call_function3(
         &self,
         a0: *mut KwabiFmgrInfo,
@@ -74,11 +99,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `spi_execute`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spi_execute(&self, a0: *const c_char, a1: bool, a2: i32) -> *mut KwabiSPIResult {
         (self.api.spi_execute.expect("spi_execute"))(a0, a1, a2)
     }
 
     /// Slot `spi_execute_plan`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spi_execute_plan(
         &self,
         a0: *mut KwabiSPIPlan,
@@ -91,6 +126,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `spi_prepare`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spi_prepare(
         &self,
         a0: *const c_char,
@@ -101,141 +141,281 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `spi_free_plan`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spi_free_plan(&self, a0: *mut KwabiSPIPlan) {
         (self.api.spi_free_plan.expect("spi_free_plan"))(a0)
     }
 
     /// Slot `spi_free_result`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spi_free_result(&self, a0: *mut KwabiSPIResult) {
         (self.api.spi_free_result.expect("spi_free_result"))(a0)
     }
 
     /// Slot `spi_result_ntuples`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spi_result_ntuples(&self, a0: *mut KwabiSPIResult) -> i32 {
         (self.api.spi_result_ntuples.expect("spi_result_ntuples"))(a0)
     }
 
     /// Slot `spi_result_get_value`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spi_result_get_value(&self, a0: *mut KwabiSPIResult, a1: i32, a2: i32) -> u64 {
         (self.api.spi_result_get_value.expect("spi_result_get_value"))(a0, a1, a2)
     }
 
     /// Slot `type_input`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn type_input(&self, a0: u32, a1: *const c_char, a2: i32) -> u64 {
         (self.api.type_input.expect("type_input"))(a0, a1, a2)
     }
 
     /// Slot `type_output`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn type_output(&self, a0: u32, a1: u64) -> *mut c_char {
         (self.api.type_output.expect("type_output"))(a0, a1)
     }
 
     /// Slot `type_recv`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn type_recv(&self, a0: u32, a1: *mut std::ffi::c_void) -> u64 {
         (self.api.type_recv.expect("type_recv"))(a0, a1)
     }
 
     /// Slot `type_send`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn type_send(&self, a0: u32, a1: u64, a2: *mut std::ffi::c_void) {
         (self.api.type_send.expect("type_send"))(a0, a1, a2)
     }
 
     /// Slot `type_element_type`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn type_element_type(&self, a0: u32) -> u32 {
         (self.api.type_element_type.expect("type_element_type"))(a0)
     }
 
     /// Slot `type_length`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn type_length(&self, a0: u32) -> i16 {
         (self.api.type_length.expect("type_length"))(a0)
     }
 
     /// Slot `type_is_array`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn type_is_array(&self, a0: u32) -> bool {
         (self.api.type_is_array.expect("type_is_array"))(a0)
     }
 
     /// Slot `type_is_composite`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn type_is_composite(&self, a0: u32) -> bool {
         (self.api.type_is_composite.expect("type_is_composite"))(a0)
     }
 
     /// Slot `type_base_type`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn type_base_type(&self, a0: u32) -> u32 {
         (self.api.type_base_type.expect("type_base_type"))(a0)
     }
 
     /// Slot `parse_expr`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn parse_expr(&self, a0: *const c_char, a1: *mut u32, a2: i32) -> *mut KwabiNode {
         (self.api.parse_expr.expect("parse_expr"))(a0, a1, a2)
     }
 
     /// Slot `parse_stmt`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn parse_stmt(&self, a0: *const c_char) -> *mut KwabiNode {
         (self.api.parse_stmt.expect("parse_stmt"))(a0)
     }
 
     /// Slot `parse_type`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn parse_type(&self, a0: *const c_char) -> *mut KwabiNode {
         (self.api.parse_type.expect("parse_type"))(a0)
     }
 
     /// Slot `free_node`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn free_node(&self, a0: *mut KwabiNode) {
         (self.api.free_node.expect("free_node"))(a0)
     }
 
     /// Slot `oper_left_type`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn oper_left_type(&self, a0: u32) -> u32 {
         (self.api.oper_left_type.expect("oper_left_type"))(a0)
     }
 
     /// Slot `oper_right_type`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn oper_right_type(&self, a0: u32) -> u32 {
         (self.api.oper_right_type.expect("oper_right_type"))(a0)
     }
 
     /// Slot `oper_result_type`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn oper_result_type(&self, a0: u32) -> u32 {
         (self.api.oper_result_type.expect("oper_result_type"))(a0)
     }
 
     /// Slot `oper_is_commutative`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn oper_is_commutative(&self, a0: u32) -> bool {
         (self.api.oper_is_commutative.expect("oper_is_commutative"))(a0)
     }
 
     /// Slot `extension_oid`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn extension_oid(&self, a0: *const c_char) -> u32 {
         (self.api.extension_oid.expect("extension_oid"))(a0)
     }
 
     /// Slot `extension_installed`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn extension_installed(&self, a0: *const c_char) -> bool {
         (self.api.extension_installed.expect("extension_installed"))(a0)
     }
 
     /// Slot `extension_version`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn extension_version(&self, a0: *const c_char) -> *const c_char {
         (self.api.extension_version.expect("extension_version"))(a0)
     }
 
     /// Slot `sequence_nextval`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn sequence_nextval(&self, a0: u32) -> i64 {
         (self.api.sequence_nextval.expect("sequence_nextval"))(a0)
     }
 
     /// Slot `sequence_currval`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn sequence_currval(&self, a0: u32) -> i64 {
         (self.api.sequence_currval.expect("sequence_currval"))(a0)
     }
 
     /// Slot `sequence_setval`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn sequence_setval(&self, a0: u32, a1: i64) -> i64 {
         (self.api.sequence_setval.expect("sequence_setval"))(a0, a1)
     }
 
     /// Slot `logical_decoding_begin`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn logical_decoding_begin(
         &self,
         a0: *const c_char,
@@ -248,11 +428,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `logical_decoding_end`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn logical_decoding_end(&self, a0: *mut KwabiLogicalDecodingCtx) {
         (self.api.logical_decoding_end.expect("logical_decoding_end"))(a0)
     }
 
     /// Slot `logical_decoding_read`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn logical_decoding_read(
         &self,
         a0: *mut KwabiLogicalDecodingCtx,
@@ -266,6 +456,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `output_plugin_startup`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn output_plugin_startup(&self, a0: *mut std::ffi::c_void) {
         (self
             .api
@@ -274,6 +469,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `output_plugin_shutdown`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn output_plugin_shutdown(&self, a0: *mut std::ffi::c_void) {
         (self
             .api
@@ -282,6 +482,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `bgworker_register`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn bgworker_register(
         &self,
         a0: *const c_char,
@@ -292,86 +497,171 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `bgworker_terminate`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn bgworker_terminate(&self, a0: u32) {
         (self.api.bgworker_terminate.expect("bgworker_terminate"))(a0)
     }
 
     /// Slot `bgworker_is_running`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn bgworker_is_running(&self, a0: u32) -> bool {
         (self.api.bgworker_is_running.expect("bgworker_is_running"))(a0)
     }
 
     /// Slot `block_get_number`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn block_get_number(&self, a0: *mut std::ffi::c_void) -> u32 {
         (self.api.block_get_number.expect("block_get_number"))(a0)
     }
 
     /// Slot `block_get_offset`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn block_get_offset(&self, a0: *mut std::ffi::c_void) -> u16 {
         (self.api.block_get_offset.expect("block_get_offset"))(a0)
     }
 
     /// Slot `block_is_valid`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn block_is_valid(&self, a0: *mut std::ffi::c_void) -> bool {
         (self.api.block_is_valid.expect("block_is_valid"))(a0)
     }
 
     /// Slot `slru_create`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn slru_create(&self, a0: *const c_char, a1: i32, a2: i32) {
         (self.api.slru_create.expect("slru_create"))(a0, a1, a2)
     }
 
     /// Slot `slru_read`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn slru_read(&self, a0: *const c_char, a1: i64, a2: *mut std::ffi::c_void) {
         (self.api.slru_read.expect("slru_read"))(a0, a1, a2)
     }
 
     /// Slot `slru_write`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn slru_write(&self, a0: *const c_char, a1: i64, a2: *const std::ffi::c_void) {
         (self.api.slru_write.expect("slru_write"))(a0, a1, a2)
     }
 
     /// Slot `value_is_null`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn value_is_null(&self, a0: *mut KwabiValue) -> bool {
         (self.api.value_is_null.expect("value_is_null"))(a0)
     }
 
     /// Slot `value_get_datum`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn value_get_datum(&self, a0: *mut KwabiValue) -> u64 {
         (self.api.value_get_datum.expect("value_get_datum"))(a0)
     }
 
     /// Slot `value_get_type`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn value_get_type(&self, a0: *mut KwabiValue) -> u32 {
         (self.api.value_get_type.expect("value_get_type"))(a0)
     }
 
     /// Slot `value_get_typmod`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn value_get_typmod(&self, a0: *mut KwabiValue) -> i32 {
         (self.api.value_get_typmod.expect("value_get_typmod"))(a0)
     }
 
     /// Slot `palloc`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn palloc(&self, a0: usize) -> *mut std::ffi::c_void {
         (self.api.palloc.expect("palloc"))(a0)
     }
 
     /// Slot `palloc0`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn palloc0(&self, a0: usize) -> *mut std::ffi::c_void {
         (self.api.palloc0.expect("palloc0"))(a0)
     }
 
     /// Slot `repalloc`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn repalloc(&self, a0: *mut std::ffi::c_void, a1: usize) -> *mut std::ffi::c_void {
         (self.api.repalloc.expect("repalloc"))(a0, a1)
     }
 
     /// Slot `pfree`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn pfree(&self, a0: *mut std::ffi::c_void) {
         (self.api.pfree.expect("pfree"))(a0)
     }
 
     /// Slot `memory_context_current`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn memory_context_current(&self) -> *mut KwabiMemoryContext {
         (self
             .api
@@ -380,6 +670,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `memory_context_switch_to`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn memory_context_switch_to(
         &self,
         a0: *mut KwabiMemoryContext,
@@ -391,11 +686,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `memory_context_reset`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn memory_context_reset(&self, a0: *mut KwabiMemoryContext) {
         (self.api.memory_context_reset.expect("memory_context_reset"))(a0)
     }
 
     /// Slot `memory_context_delete`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn memory_context_delete(&self, a0: *mut KwabiMemoryContext) {
         (self
             .api
@@ -404,76 +709,151 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `ereport`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn ereport(&self, a0: i32, msg: *const c_char) {
-        (self.api.ereport.expect("ereport"))(a0, b"%s\0".as_ptr() as *const c_char, msg)
+        (self.api.ereport.expect("ereport"))(a0, c"%s".as_ptr(), msg)
     }
 
     /// Slot `elog`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn elog(&self, a0: i32, msg: *const c_char) {
-        (self.api.elog.expect("elog"))(a0, b"%s\0".as_ptr() as *const c_char, msg)
+        (self.api.elog.expect("elog"))(a0, c"%s".as_ptr(), msg)
     }
 
     /// Slot `error_message`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn error_message(&self) -> *const c_char {
         (self.api.error_message.expect("error_message"))()
     }
 
     /// Slot `error_code`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn error_code(&self) -> i32 {
         (self.api.error_code.expect("error_code"))()
     }
 
     /// Slot `error_clear`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn error_clear(&self) {
         (self.api.error_clear.expect("error_clear"))()
     }
 
     /// Slot `relation_open`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn relation_open(&self, a0: u32, a1: u32) -> *mut KwabiRelation {
         (self.api.relation_open.expect("relation_open"))(a0, a1)
     }
 
     /// Slot `relation_close`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn relation_close(&self, a0: *mut KwabiRelation, a1: u32) {
         (self.api.relation_close.expect("relation_close"))(a0, a1)
     }
 
     /// Slot `relation_id`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn relation_id(&self, a0: *mut KwabiRelation) -> u32 {
         (self.api.relation_id.expect("relation_id"))(a0)
     }
 
     /// Slot `relation_name`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn relation_name(&self, a0: *mut KwabiRelation) -> *const c_char {
         (self.api.relation_name.expect("relation_name"))(a0)
     }
 
     /// Slot `relation_namespace`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn relation_namespace(&self, a0: *mut KwabiRelation) -> u32 {
         (self.api.relation_namespace.expect("relation_namespace"))(a0)
     }
 
     /// Slot `relation_tupledesc`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn relation_tupledesc(&self, a0: *mut KwabiRelation) -> *mut std::ffi::c_void {
         (self.api.relation_tupledesc.expect("relation_tupledesc"))(a0)
     }
 
     /// Slot `syscache_get_oid`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn syscache_get_oid(&self, a0: *const c_char, a1: *const c_char, a2: u64) -> u32 {
         (self.api.syscache_get_oid.expect("syscache_get_oid"))(a0, a1, a2)
     }
 
     /// Slot `syscache_get_tuple`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn syscache_get_tuple(&self, a0: *const c_char, a1: u64) -> *mut std::ffi::c_void {
         (self.api.syscache_get_tuple.expect("syscache_get_tuple"))(a0, a1)
     }
 
     /// Slot `syscache_free_tuple`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn syscache_free_tuple(&self, a0: *mut std::ffi::c_void) {
         (self.api.syscache_free_tuple.expect("syscache_free_tuple"))(a0)
     }
 
     /// Slot `planner_info`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn planner_info(
         &self,
         a0: *mut KwabiNode,
@@ -484,11 +864,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `free_planner_info`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn free_planner_info(&self, a0: *mut KwabiPlannerInfo) {
         (self.api.free_planner_info.expect("free_planner_info"))(a0)
     }
 
     /// Slot `planner_estimate_rows`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn planner_estimate_rows(
         &self,
         a0: *mut KwabiPlannerInfo,
@@ -501,6 +891,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `planner_estimate_cost`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn planner_estimate_cost(
         &self,
         a0: *mut KwabiPlannerInfo,
@@ -513,46 +908,91 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `shmem_alloc`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn shmem_alloc(&self, a0: usize) -> *mut std::ffi::c_void {
         (self.api.shmem_alloc.expect("shmem_alloc"))(a0)
     }
 
     /// Slot `shmem_free`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn shmem_free(&self, a0: *mut std::ffi::c_void) {
         (self.api.shmem_free.expect("shmem_free"))(a0)
     }
 
     /// Slot `shmem_get`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn shmem_get(&self, a0: *const c_char, a1: usize) -> *mut std::ffi::c_void {
         (self.api.shmem_get.expect("shmem_get"))(a0, a1)
     }
 
     /// Slot `lock_acquire`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn lock_acquire(&self, a0: *mut std::ffi::c_void, a1: u32) {
         (self.api.lock_acquire.expect("lock_acquire"))(a0, a1)
     }
 
     /// Slot `lock_release`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn lock_release(&self, a0: *mut std::ffi::c_void) {
         (self.api.lock_release.expect("lock_release"))(a0)
     }
 
     /// Slot `lock_held_by_me`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn lock_held_by_me(&self, a0: *mut std::ffi::c_void) -> bool {
         (self.api.lock_held_by_me.expect("lock_held_by_me"))(a0)
     }
 
     /// Slot `spin_acquire`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spin_acquire(&self, a0: *mut std::ffi::c_void) {
         (self.api.spin_acquire.expect("spin_acquire"))(a0)
     }
 
     /// Slot `spin_release`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spin_release(&self, a0: *mut std::ffi::c_void) {
         (self.api.spin_release.expect("spin_release"))(a0)
     }
 
     /// Slot `autovacuum_is_running`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn autovacuum_is_running(&self) -> bool {
         (self
             .api
@@ -561,26 +1001,51 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `autovacuum_naptime`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn autovacuum_naptime(&self) -> i32 {
         (self.api.autovacuum_naptime.expect("autovacuum_naptime"))()
     }
 
     /// Slot `syslogger_log`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn syslogger_log(&self, a0: *const c_char) {
         (self.api.syslogger_log.expect("syslogger_log"))(a0)
     }
 
     /// Slot `walsender_send`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn walsender_send(&self, a0: *const c_char, a1: i32) {
         (self.api.walsender_send.expect("walsender_send"))(a0, a1)
     }
 
     /// Slot `walsender_receive`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn walsender_receive(&self, a0: *mut c_char, a1: i32) -> i32 {
         (self.api.walsender_receive.expect("walsender_receive"))(a0, a1)
     }
 
     /// Slot `walsender_is_connected`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn walsender_is_connected(&self) -> bool {
         (self
             .api
@@ -589,96 +1054,191 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `defrem_create`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn defrem_create(&self, a0: *const c_char, a1: *const c_char, a2: *const c_char) {
         (self.api.defrem_create.expect("defrem_create"))(a0, a1, a2)
     }
 
     /// Slot `defrem_alter`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn defrem_alter(&self, a0: *const c_char, a1: *const c_char) {
         (self.api.defrem_alter.expect("defrem_alter"))(a0, a1)
     }
 
     /// Slot `defrem_drop`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn defrem_drop(&self, a0: *const c_char) {
         (self.api.defrem_drop.expect("defrem_drop"))(a0)
     }
 
     /// Slot `node_type`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn node_type(&self, a0: *mut KwabiNode) -> u32 {
         (self.api.node_type.expect("node_type"))(a0)
     }
 
     /// Slot `node_type_name`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn node_type_name(&self, a0: *mut KwabiNode) -> *const c_char {
         (self.api.node_type_name.expect("node_type_name"))(a0)
     }
 
     /// Slot `node_get_list`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn node_get_list(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.node_get_list.expect("node_get_list"))(a0)
     }
 
     /// Slot `node_list_length`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn node_list_length(&self, a0: *mut KwabiNode) -> i32 {
         (self.api.node_list_length.expect("node_list_length"))(a0)
     }
 
     /// Slot `node_list_get`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn node_list_get(&self, a0: *mut KwabiNode, a1: i32) -> *mut KwabiNode {
         (self.api.node_list_get.expect("node_list_get"))(a0, a1)
     }
 
     /// Slot `query_command_type`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_command_type(&self, a0: *mut KwabiNode) -> u32 {
         (self.api.query_command_type.expect("query_command_type"))(a0)
     }
 
     /// Slot `query_rtable`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_rtable(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.query_rtable.expect("query_rtable"))(a0)
     }
 
     /// Slot `query_target_list`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_target_list(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.query_target_list.expect("query_target_list"))(a0)
     }
 
     /// Slot `query_returning_list`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_returning_list(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.query_returning_list.expect("query_returning_list"))(a0)
     }
 
     /// Slot `query_jointree`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_jointree(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.query_jointree.expect("query_jointree"))(a0)
     }
 
     /// Slot `query_group_clause`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_group_clause(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.query_group_clause.expect("query_group_clause"))(a0)
     }
 
     /// Slot `query_sort_clause`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_sort_clause(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.query_sort_clause.expect("query_sort_clause"))(a0)
     }
 
     /// Slot `query_limit_offset`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_limit_offset(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.query_limit_offset.expect("query_limit_offset"))(a0)
     }
 
     /// Slot `query_limit_count`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_limit_count(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.query_limit_count.expect("query_limit_count"))(a0)
     }
 
     /// Slot `query_has_for_update`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_has_for_update(&self, a0: *mut KwabiNode) -> bool {
         (self.api.query_has_for_update.expect("query_has_for_update"))(a0)
     }
 
     /// Slot `query_has_row_security`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn query_has_row_security(&self, a0: *mut KwabiNode) -> bool {
         (self
             .api
@@ -687,6 +1247,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `planned_stmt_plan_tree`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn planned_stmt_plan_tree(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self
             .api
@@ -695,11 +1260,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `planned_stmt_rtable`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn planned_stmt_rtable(&self, a0: *mut KwabiNode) -> *mut std::ffi::c_void {
         (self.api.planned_stmt_rtable.expect("planned_stmt_rtable"))(a0)
     }
 
     /// Slot `planned_stmt_result_relations`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn planned_stmt_result_relations(
         &self,
         a0: *mut KwabiNode,
@@ -711,6 +1286,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `planned_stmt_has_returning`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn planned_stmt_has_returning(&self, a0: *mut KwabiNode) -> bool {
         (self
             .api
@@ -719,6 +1299,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `planned_stmt_has_modifying_cte`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn planned_stmt_has_modifying_cte(&self, a0: *mut KwabiNode) -> bool {
         (self
             .api
@@ -727,6 +1312,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `planned_stmt_is_utility`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn planned_stmt_is_utility(&self, a0: *mut KwabiNode) -> bool {
         (self
             .api
@@ -735,36 +1325,71 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `tuple_natts`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn tuple_natts(&self, a0: *mut std::ffi::c_void) -> i32 {
         (self.api.tuple_natts.expect("tuple_natts"))(a0)
     }
 
     /// Slot `tuple_typeid`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn tuple_typeid(&self, a0: *mut std::ffi::c_void, a1: i32) -> u32 {
         (self.api.tuple_typeid.expect("tuple_typeid"))(a0, a1)
     }
 
     /// Slot `tuple_typmod`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn tuple_typmod(&self, a0: *mut std::ffi::c_void, a1: i32) -> i32 {
         (self.api.tuple_typmod.expect("tuple_typmod"))(a0, a1)
     }
 
     /// Slot `tuple_attname`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn tuple_attname(&self, a0: *mut std::ffi::c_void, a1: i32) -> *const c_char {
         (self.api.tuple_attname.expect("tuple_attname"))(a0, a1)
     }
 
     /// Slot `tuple_attisdropped`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn tuple_attisdropped(&self, a0: *mut std::ffi::c_void, a1: i32) -> bool {
         (self.api.tuple_attisdropped.expect("tuple_attisdropped"))(a0, a1)
     }
 
     /// Slot `tuple_attnum`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn tuple_attnum(&self, a0: *mut std::ffi::c_void, a1: *const c_char) -> i32 {
         (self.api.tuple_attnum.expect("tuple_attnum"))(a0, a1)
     }
 
     /// Slot `heap_tuple_getattr`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn heap_tuple_getattr(
         &self,
         a0: *mut std::ffi::c_void,
@@ -776,6 +1401,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `heap_tuple_setattr`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn heap_tuple_setattr(
         &self,
         a0: *mut std::ffi::c_void,
@@ -787,36 +1417,71 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `heap_tuple_tableoid`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn heap_tuple_tableoid(&self, a0: *mut std::ffi::c_void) -> u32 {
         (self.api.heap_tuple_tableoid.expect("heap_tuple_tableoid"))(a0)
     }
 
     /// Slot `heap_tuple_tid`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn heap_tuple_tid(&self, a0: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
         (self.api.heap_tuple_tid.expect("heap_tuple_tid"))(a0)
     }
 
     /// Slot `slot_isnull`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn slot_isnull(&self, a0: *mut std::ffi::c_void, a1: i32) -> bool {
         (self.api.slot_isnull.expect("slot_isnull"))(a0, a1)
     }
 
     /// Slot `slot_getattr`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn slot_getattr(&self, a0: *mut std::ffi::c_void, a1: i32, a2: *mut bool) -> u64 {
         (self.api.slot_getattr.expect("slot_getattr"))(a0, a1, a2)
     }
 
     /// Slot `slot_tupledesc`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn slot_tupledesc(&self, a0: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
         (self.api.slot_tupledesc.expect("slot_tupledesc"))(a0)
     }
 
     /// Slot `table_am_get`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn table_am_get(&self, a0: *mut std::ffi::c_void) -> *mut KwabiTableAm {
         (self.api.table_am_get.expect("table_am_get"))(a0)
     }
 
     /// Slot `table_am_beginscan`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn table_am_beginscan(
         &self,
         a0: *mut std::ffi::c_void,
@@ -828,11 +1493,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `table_am_endscan`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn table_am_endscan(&self, a0: *mut std::ffi::c_void) {
         (self.api.table_am_endscan.expect("table_am_endscan"))(a0)
     }
 
     /// Slot `table_am_getnext`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn table_am_getnext(
         &self,
         a0: *mut std::ffi::c_void,
@@ -842,6 +1517,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `table_am_insert`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn table_am_insert(
         &self,
         a0: *mut std::ffi::c_void,
@@ -853,6 +1533,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `table_am_update`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn table_am_update(
         &self,
         a0: *mut std::ffi::c_void,
@@ -863,6 +1548,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `table_am_delete`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn table_am_delete(
         &self,
         a0: *mut std::ffi::c_void,
@@ -873,126 +1563,251 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `executor_start`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn executor_start(&self, a0: *mut std::ffi::c_void, a1: i32) -> *mut KwabiEState {
         (self.api.executor_start.expect("executor_start"))(a0, a1)
     }
 
     /// Slot `executor_run`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn executor_run(&self, a0: *mut KwabiEState, a1: i32, a2: i64, a3: bool) {
         (self.api.executor_run.expect("executor_run"))(a0, a1, a2, a3)
     }
 
     /// Slot `executor_finish`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn executor_finish(&self, a0: *mut KwabiEState) {
         (self.api.executor_finish.expect("executor_finish"))(a0)
     }
 
     /// Slot `executor_end`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn executor_end(&self, a0: *mut KwabiEState) {
         (self.api.executor_end.expect("executor_end"))(a0)
     }
 
     /// Slot `executor_getnext`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn executor_getnext(&self, a0: *mut KwabiEState) -> *mut std::ffi::c_void {
         (self.api.executor_getnext.expect("executor_getnext"))(a0)
     }
 
     /// Slot `buffer_get`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn buffer_get(&self, a0: *mut std::ffi::c_void, a1: u32) -> *mut std::ffi::c_void {
         (self.api.buffer_get.expect("buffer_get"))(a0, a1)
     }
 
     /// Slot `buffer_release`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn buffer_release(&self, a0: *mut std::ffi::c_void) {
         (self.api.buffer_release.expect("buffer_release"))(a0)
     }
 
     /// Slot `buffer_get_page`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn buffer_get_page(&self, a0: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
         (self.api.buffer_get_page.expect("buffer_get_page"))(a0)
     }
 
     /// Slot `buffer_mark_dirty`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn buffer_mark_dirty(&self, a0: *mut std::ffi::c_void) {
         (self.api.buffer_mark_dirty.expect("buffer_mark_dirty"))(a0)
     }
 
     /// Slot `lwlock_acquire`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn lwlock_acquire(&self, a0: *mut std::ffi::c_void, a1: u32) {
         (self.api.lwlock_acquire.expect("lwlock_acquire"))(a0, a1)
     }
 
     /// Slot `lwlock_release`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn lwlock_release(&self, a0: *mut std::ffi::c_void) {
         (self.api.lwlock_release.expect("lwlock_release"))(a0)
     }
 
     /// Slot `lwlock_held_by_me`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn lwlock_held_by_me(&self, a0: *mut std::ffi::c_void) -> bool {
         (self.api.lwlock_held_by_me.expect("lwlock_held_by_me"))(a0)
     }
 
     /// Slot `lwlock_cond_acquire`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn lwlock_cond_acquire(&self, a0: *mut std::ffi::c_void, a1: u32) -> bool {
         (self.api.lwlock_cond_acquire.expect("lwlock_cond_acquire"))(a0, a1)
     }
 
     /// Slot `spinlock_acquire`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spinlock_acquire(&self, a0: *mut std::ffi::c_void) {
         (self.api.spinlock_acquire.expect("spinlock_acquire"))(a0)
     }
 
     /// Slot `spinlock_release`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spinlock_release(&self, a0: *mut std::ffi::c_void) {
         (self.api.spinlock_release.expect("spinlock_release"))(a0)
     }
 
     /// Slot `spinlock_held_by_me`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn spinlock_held_by_me(&self, a0: *mut std::ffi::c_void) -> bool {
         (self.api.spinlock_held_by_me.expect("spinlock_held_by_me"))(a0)
     }
 
     /// Slot `guc_get_int`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn guc_get_int(&self, a0: *const c_char) -> i32 {
         (self.api.guc_get_int.expect("guc_get_int"))(a0)
     }
 
     /// Slot `guc_get_string`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn guc_get_string(&self, a0: *const c_char) -> *const c_char {
         (self.api.guc_get_string.expect("guc_get_string"))(a0)
     }
 
     /// Slot `guc_get_bool`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn guc_get_bool(&self, a0: *const c_char) -> bool {
         (self.api.guc_get_bool.expect("guc_get_bool"))(a0)
     }
 
     /// Slot `guc_get_float`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn guc_get_float(&self, a0: *const c_char) -> f64 {
         (self.api.guc_get_float.expect("guc_get_float"))(a0)
     }
 
     /// Slot `guc_set_int`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn guc_set_int(&self, a0: *const c_char, a1: i32) {
         (self.api.guc_set_int.expect("guc_set_int"))(a0, a1)
     }
 
     /// Slot `guc_set_string`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn guc_set_string(&self, a0: *const c_char, a1: *const c_char) {
         (self.api.guc_set_string.expect("guc_set_string"))(a0, a1)
     }
 
     /// Slot `guc_set_bool`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn guc_set_bool(&self, a0: *const c_char, a1: bool) {
         (self.api.guc_set_bool.expect("guc_set_bool"))(a0, a1)
     }
 
     /// Slot `guc_set_float`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn guc_set_float(&self, a0: *const c_char, a1: f64) {
         (self.api.guc_set_float.expect("guc_set_float"))(a0, a1)
     }
 
     /// Slot `explain_query`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn explain_query(
         &self,
         a0: *mut std::ffi::c_void,
@@ -1006,11 +1821,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `explain_state_new`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn explain_state_new(&self) -> *mut std::ffi::c_void {
         (self.api.explain_state_new.expect("explain_state_new"))()
     }
 
     /// Slot `explain_state_set_option`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn explain_state_set_option(
         &self,
         a0: *mut std::ffi::c_void,
@@ -1024,6 +1849,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `explain_state_set_format`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn explain_state_set_format(&self, a0: *mut std::ffi::c_void, a1: i32) {
         (self
             .api
@@ -1032,16 +1862,31 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `explain_state_text`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn explain_state_text(&self, a0: *mut std::ffi::c_void) -> *const c_char {
         (self.api.explain_state_text.expect("explain_state_text"))(a0)
     }
 
     /// Slot `explain_state_free`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn explain_state_free(&self, a0: *mut std::ffi::c_void) {
         (self.api.explain_state_free.expect("explain_state_free"))(a0)
     }
 
     /// Slot `explain_get_index_name`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn explain_get_index_name(&self, a0: u32) -> *const c_char {
         (self
             .api
@@ -1050,6 +1895,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `vacuum_rel`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn vacuum_rel(
         &self,
         a0: *mut std::ffi::c_void,
@@ -1060,6 +1910,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `vacuum_analyze_rel`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn vacuum_analyze_rel(
         &self,
         a0: *mut std::ffi::c_void,
@@ -1070,21 +1925,41 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `trigger_desc`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn trigger_desc(&self, a0: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
         (self.api.trigger_desc.expect("trigger_desc"))(a0)
     }
 
     /// Slot `trigger_count`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn trigger_count(&self, a0: *mut std::ffi::c_void) -> i32 {
         (self.api.trigger_count.expect("trigger_count"))(a0)
     }
 
     /// Slot `trigger_get`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn trigger_get(&self, a0: *mut std::ffi::c_void, a1: i32) -> *mut std::ffi::c_void {
         (self.api.trigger_get.expect("trigger_get"))(a0, a1)
     }
 
     /// Slot `reorderbuffer_get_lsn`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn reorderbuffer_get_lsn(&self, a0: *mut KwabiReorderBuffer) -> i64 {
         (self
             .api
@@ -1093,6 +1968,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `reorderbuffer_get_xid`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn reorderbuffer_get_xid(&self, a0: *mut KwabiReorderBuffer, a1: u32) -> i64 {
         (self
             .api
@@ -1101,6 +1981,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `reorderbuffer_get_changes`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn reorderbuffer_get_changes(&self, a0: *mut KwabiReorderBuffer, a1: u32) -> i32 {
         (self
             .api
@@ -1109,11 +1994,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `slot_get_lsn`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn slot_get_lsn(&self, a0: *const c_char) -> i64 {
         (self.api.slot_get_lsn.expect("slot_get_lsn"))(a0)
     }
 
     /// Slot `slot_get_catalog_xmin`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn slot_get_catalog_xmin(&self, a0: *const c_char) -> i64 {
         (self
             .api
@@ -1122,16 +2017,31 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `slot_is_active`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn slot_is_active(&self, a0: *const c_char) -> bool {
         (self.api.slot_is_active.expect("slot_is_active"))(a0)
     }
 
     /// Slot `postmaster_is_alive`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn postmaster_is_alive(&self) -> bool {
         (self.api.postmaster_is_alive.expect("postmaster_is_alive"))()
     }
 
     /// Slot `postmaster_get_child_pid`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn postmaster_get_child_pid(&self, a0: u32) -> i32 {
         (self
             .api
@@ -1140,6 +2050,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `itempointer_get_block_number`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn itempointer_get_block_number(&self, a0: *mut std::ffi::c_void) -> u32 {
         (self
             .api
@@ -1148,6 +2063,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `itempointer_get_offset_number`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn itempointer_get_offset_number(&self, a0: *mut std::ffi::c_void) -> u16 {
         (self
             .api
@@ -1156,61 +2076,121 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `itempointer_is_valid`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn itempointer_is_valid(&self, a0: *mut std::ffi::c_void) -> bool {
         (self.api.itempointer_is_valid.expect("itempointer_is_valid"))(a0)
     }
 
     /// Slot `rel_id`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn rel_id(&self, a0: *mut KwabiRelation) -> u32 {
         (self.api.rel_id.expect("rel_id"))(a0)
     }
 
     /// Slot `rel_name`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn rel_name(&self, a0: *mut KwabiRelation) -> *const c_char {
         (self.api.rel_name.expect("rel_name"))(a0)
     }
 
     /// Slot `rel_namespace`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn rel_namespace(&self, a0: *mut KwabiRelation) -> u32 {
         (self.api.rel_namespace.expect("rel_namespace"))(a0)
     }
 
     /// Slot `rel_relkind`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn rel_relkind(&self, a0: *mut KwabiRelation) -> i8 {
         (self.api.rel_relkind.expect("rel_relkind"))(a0)
     }
 
     /// Slot `rel_relam`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn rel_relam(&self, a0: *mut KwabiRelation) -> u32 {
         (self.api.rel_relam.expect("rel_relam"))(a0)
     }
 
     /// Slot `rel_tupledesc`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn rel_tupledesc(&self, a0: *mut KwabiRelation) -> *mut std::ffi::c_void {
         (self.api.rel_tupledesc.expect("rel_tupledesc"))(a0)
     }
 
     /// Slot `rel_index_list`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn rel_index_list(&self, a0: *mut KwabiRelation) -> *mut std::ffi::c_void {
         (self.api.rel_index_list.expect("rel_index_list"))(a0)
     }
 
     /// Slot `stringinfo_init`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn stringinfo_init(&self, a0: *mut std::ffi::c_void) {
         (self.api.stringinfo_init.expect("stringinfo_init"))(a0)
     }
 
     /// Slot `stringinfo_reset`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn stringinfo_reset(&self, a0: *mut std::ffi::c_void) {
         (self.api.stringinfo_reset.expect("stringinfo_reset"))(a0)
     }
 
     /// Slot `stringinfo_append`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn stringinfo_append(&self, a0: *mut std::ffi::c_void, a1: *const c_char) {
         (self.api.stringinfo_append.expect("stringinfo_append"))(a0, a1)
     }
 
     /// Slot `stringinfo_append_char`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn stringinfo_append_char(&self, a0: *mut std::ffi::c_void, a1: i8) {
         (self
             .api
@@ -1219,6 +2199,11 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `stringinfo_append_int`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn stringinfo_append_int(&self, a0: *mut std::ffi::c_void, a1: i64) {
         (self
             .api
@@ -1227,21 +2212,41 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `stringinfo_data`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn stringinfo_data(&self, a0: *mut std::ffi::c_void) -> *const c_char {
         (self.api.stringinfo_data.expect("stringinfo_data"))(a0)
     }
 
     /// Slot `stringinfo_len`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn stringinfo_len(&self, a0: *mut std::ffi::c_void) -> i32 {
         (self.api.stringinfo_len.expect("stringinfo_len"))(a0)
     }
 
     /// Slot `memory_chunk_context`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn memory_chunk_context(&self, a0: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
         (self.api.memory_chunk_context.expect("memory_chunk_context"))(a0)
     }
 
     /// Slot `current_memory_context`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn current_memory_context(&self) -> *mut std::ffi::c_void {
         (self
             .api
@@ -1250,11 +2255,21 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `raise_error`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn raise_error(&self, a0: i32, a1: *const c_char) {
         (self.api.raise_error.expect("raise_error"))(a0, a1)
     }
 
     /// Slot `try_body`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn try_body(
         &self,
         a0: guarded::KwabiBodyFn,
@@ -1265,16 +2280,31 @@ impl<'a> Raw<'a> {
     }
 
     /// Slot `error_get`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn error_get(&self, a0: *mut guarded::KwabiErrorAbi) {
         (self.api.error_get.expect("error_get"))(a0)
     }
 
     /// Slot `capabilities`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn capabilities(&self) -> u64 {
         (self.api.capabilities.expect("capabilities"))()
     }
 
     /// Slot `memory_context_create`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
     pub unsafe fn memory_context_create(&self, a0: *const c_char) -> *mut KwabiMemoryContext {
         (self
             .api
