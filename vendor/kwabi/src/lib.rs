@@ -443,7 +443,52 @@ pub struct KwabiV1 {
             *mut guarded::KwabiErrorAbi,
         ) -> i32,
     >,
+    pub hook_register_executor_check_perms:
+        Option<unsafe extern "C" fn(KwabiExecutorCheckPermsBodyFn, *mut std::ffi::c_void) -> i32>,
+    pub hook_register_planner:
+        Option<unsafe extern "C" fn(KwabiPlannerBodyFn, *mut std::ffi::c_void) -> i32>,
+    pub hook_next_executor_check_perms: Option<
+        unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            i32,
+            *mut i32,
+            *mut guarded::KwabiErrorAbi,
+        ) -> i32,
+    >,
+    pub hook_next_planner: Option<
+        unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *const std::ffi::c_char,
+            i32,
+            *mut std::ffi::c_void,
+            *mut *mut std::ffi::c_void,
+            *mut guarded::KwabiErrorAbi,
+        ) -> i32,
+    >,
 }
+
+pub type KwabiExecutorCheckPermsBodyFn = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *mut std::ffi::c_void,
+    i32,
+    *mut std::ffi::c_void,
+    *mut i32,
+    *mut guarded::KwabiErrorAbi,
+    *mut std::ffi::c_void,
+) -> i32;
+pub type KwabiPlannerBodyFn = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const std::ffi::c_char,
+    i32,
+    *mut std::ffi::c_void,
+    *mut std::ffi::c_void,
+    *mut *mut std::ffi::c_void,
+    *mut guarded::KwabiErrorAbi,
+    *mut std::ffi::c_void,
+) -> i32;
 
 /// Executor hook body types (kwabi.h). The last argument is the caller's `arg`.
 pub type KwabiExecutorStartBodyFn = unsafe extern "C" fn(

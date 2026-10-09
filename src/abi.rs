@@ -136,6 +136,25 @@ pub type KwabiExecutorFinishBody =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;
 pub type KwabiExecutorEndBody =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;
+pub type KwabiExecutorCheckPermsBody = unsafe extern "C" fn(
+    *mut c_void,
+    *mut c_void,
+    c_int,
+    *mut c_void,
+    *mut c_int,
+    *mut KwabiError,
+    *mut c_void,
+) -> c_int;
+pub type KwabiPlannerBody = unsafe extern "C" fn(
+    *mut c_void,
+    *const c_char,
+    c_int,
+    *mut c_void,
+    *mut c_void,
+    *mut *mut c_void,
+    *mut KwabiError,
+    *mut c_void,
+) -> c_int;
 
 #[repr(C)]
 pub struct KwabiV1 {
@@ -404,11 +423,35 @@ pub struct KwabiV1 {
         Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut KwabiError) -> c_int>,
     pub hook_next_executor_end:
         Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut KwabiError) -> c_int>,
+    pub hook_register_executor_check_perms:
+        Option<unsafe extern "C" fn(KwabiExecutorCheckPermsBody, *mut c_void) -> c_int>,
+    pub hook_register_planner: Option<unsafe extern "C" fn(KwabiPlannerBody, *mut c_void) -> c_int>,
+    pub hook_next_executor_check_perms: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            c_int,
+            *mut c_int,
+            *mut KwabiError,
+        ) -> c_int,
+    >,
+    pub hook_next_planner: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *const c_char,
+            c_int,
+            *mut c_void,
+            *mut *mut c_void,
+            *mut KwabiError,
+        ) -> c_int,
+    >,
 }
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 214;
+    pub const FIELD_COUNT: usize = 218;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -632,6 +675,10 @@ impl Default for KwabiV1 {
             hook_next_executor_run: None,
             hook_next_executor_finish: None,
             hook_next_executor_end: None,
+            hook_register_executor_check_perms: None,
+            hook_register_planner: None,
+            hook_next_executor_check_perms: None,
+            hook_next_planner: None,
         }
     }
 }

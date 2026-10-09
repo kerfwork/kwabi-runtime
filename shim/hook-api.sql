@@ -22,6 +22,8 @@ DROP FUNCTION IF EXISTS kwabi_hook_test_install();
 DROP FUNCTION IF EXISTS kwabi_hook_test_clear();
 DROP FUNCTION IF EXISTS kwabi_hook_test_trace();
 DROP FUNCTION IF EXISTS kwabi_hook_test_refuse(boolean);
+DROP FUNCTION IF EXISTS kwabi_hook_test_install_planner();
+DROP FUNCTION IF EXISTS kwabi_hook_test_deny(boolean);
 
 CREATE FUNCTION kwabi_hook_test_install() RETURNS text
     AS :'bundle', 'kwabi_hook_test_install' LANGUAGE C;
@@ -31,6 +33,10 @@ CREATE FUNCTION kwabi_hook_test_trace() RETURNS text
     AS :'bundle', 'kwabi_hook_test_trace' LANGUAGE C;
 CREATE FUNCTION kwabi_hook_test_refuse(boolean) RETURNS boolean
     AS :'bundle', 'kwabi_hook_test_refuse' LANGUAGE C;
+CREATE FUNCTION kwabi_hook_test_install_planner() RETURNS text
+    AS :'bundle', 'kwabi_hook_test_install_planner' LANGUAGE C;
+CREATE FUNCTION kwabi_hook_test_deny(boolean) RETURNS boolean
+    AS :'bundle', 'kwabi_hook_test_deny' LANGUAGE C;
 
 SELECT 'install: ' || kwabi_hook_test_install() AS status;
 
@@ -104,5 +110,54 @@ DECLARE tr text;
 BEGIN
   tr := kwabi_hook_test_trace();
   RAISE NOTICE 'check untraced_statement_records_nothing (trace=%): %', tr,
+    CASE WHEN tr = '' THEN 't' ELSE 'f' END;
+END $$;
+
+-- 6. Permission check and planner. The planner body runs first for a statement, then
+--    the start body and the permission-check body, then the run chain. Planner and
+--    check bodies record only traced statements, as the other bodies do.
+SELECT 'install planner: ' || kwabi_hook_test_install_planner() AS status_planner;
+SELECT kwabi_hook_test_clear();
+SELECT count(*) AS rows_with_planner FROM generate_series(1, 3) /* kwt_trace */;
+DO $$
+DECLARE tr text;
+BEGIN
+  tr := kwabi_hook_test_trace();
+  RAISE NOTICE 'check planner_and_check_order (trace=%): %', tr,
+    CASE WHEN tr = 'PSC12FE' THEN 't' ELSE 'f' END;
+END $$;
+
+-- 7. A denial from the permission-check body reaches the statement with the body's
+--    SQLSTATE and message, and the planner has already run.
+SELECT kwabi_hook_test_deny(true);
+SELECT kwabi_hook_test_clear();
+DO $$
+DECLARE r text; tr text;
+BEGIN
+  BEGIN
+    EXECUTE 'SELECT count(*) FROM generate_series(1, 3) /* kwt_trace */';
+    r := 'no error';
+  EXCEPTION WHEN others THEN
+    r := SQLSTATE || '|' || SQLERRM;
+  END;
+  tr := kwabi_hook_test_trace();
+  RAISE NOTICE 'check check_perms_denial (got %): %', r,
+    CASE WHEN r = '42501|denied by kwabi test body' THEN 't' ELSE 'f' END;
+  -- Inside a DO block PL/pgSQL plans an EXECUTE more than once, so the planner
+  -- count is not fixed. What matters: the permission check is the last hook to run,
+  -- and no run-side link (the body's '1' or '2', finish or end) ran after it.
+  RAISE NOTICE 'check denial_stops_before_run (trace=%): %', tr,
+    CASE WHEN tr ~ '^P+SC$' THEN 't' ELSE 'f' END;
+END $$;
+SELECT kwabi_hook_test_deny(false);
+
+-- 8. Negative control for the new points: an untraced statement records nothing.
+SELECT kwabi_hook_test_clear();
+SELECT count(*) FROM generate_series(1, 3);
+DO $$
+DECLARE tr text;
+BEGIN
+  tr := kwabi_hook_test_trace();
+  RAISE NOTICE 'check untraced_with_planner_records_nothing (trace=%): %', tr,
     CASE WHEN tr = '' THEN 't' ELSE 'f' END;
 END $$;

@@ -69,6 +69,8 @@ VERBATIM = {
     "KwabiExecutorRunBody": "KwabiExecutorRunBody",
     "KwabiExecutorFinishBody": "KwabiExecutorFinishBody",
     "KwabiExecutorEndBody": "KwabiExecutorEndBody",
+    "KwabiExecutorCheckPermsBody": "KwabiExecutorCheckPermsBody",
+    "KwabiPlannerBody": "KwabiPlannerBody",
 }
 
 # Opaque handle typedefs -> the Rust pointee they actually are.
@@ -422,6 +424,10 @@ def emit(fields):
     L.append("    unsafe extern \"C\" fn(*mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
     L.append("pub type KwabiExecutorEndBody =")
     L.append("    unsafe extern \"C\" fn(*mut c_void, *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
+    L.append("pub type KwabiExecutorCheckPermsBody =")
+    L.append("    unsafe extern \"C\" fn(*mut c_void, *mut c_void, c_int, *mut c_void, *mut c_int, *mut KwabiError, *mut c_void) -> c_int;")
+    L.append("pub type KwabiPlannerBody =")
+    L.append("    unsafe extern \"C\" fn(*mut c_void, *const c_char, c_int, *mut c_void, *mut c_void, *mut *mut c_void, *mut KwabiError, *mut c_void) -> c_int;")
     L.append("")
     L.append("#[repr(C)]")
     L.append("pub struct KwabiV1 {")

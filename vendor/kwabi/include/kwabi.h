@@ -593,6 +593,25 @@ typedef KwabiStatus (*KwabiExecutorFinishBody)(KwabiQueryDesc queryDesc, KwabiHo
                                                KwabiError *err, void *arg);
 typedef KwabiStatus (*KwabiExecutorEndBody)(KwabiQueryDesc queryDesc, KwabiHookNext next,
                                             KwabiError *err, void *arg);
+/* Permission check (ExecCheckPermissions). PostgreSQL runs its built-in checks
+ * first and calls the hook only when they pass, so a body can deny but never grant.
+ * `*allowed` is the result. With ereport_on_violation set, a denial must come back
+ * as KWABI_ERR_BODY_RAISED with `err` filled; the trampoline raises it. A silent
+ * denial with ereport_on_violation set is raised as 42501 by the trampoline. */
+typedef KwabiStatus (*KwabiExecutorCheckPermsBody)(KwabiList rangeTable,
+                                                   KwabiList rtePermInfos,
+                                                   int ereport_on_violation,
+                                                   KwabiHookNext next,
+                                                   int *allowed, KwabiError *err,
+                                                   void *arg);
+
+/* Planner (planner_hook). `*planned` receives the PlannedStmt. A body that returns
+ * KWABI_OK must set it; a NULL result is raised as an error by the trampoline. */
+typedef KwabiStatus (*KwabiPlannerBody)(KwabiNode parse, const char *queryString,
+                                        int cursorOptions,
+                                        KwabiParamListInfo boundParams,
+                                        KwabiHookNext next, KwabiNode *planned,
+                                        KwabiError *err, void *arg);
 
 typedef struct KwabiV1 {
     uint32_t version;  /* KWABI_VERSION_1 */
@@ -1088,6 +1107,22 @@ typedef struct KwabiV1 {
                                              KwabiError *err);
     KwabiStatus (*hook_next_executor_end)(KwabiHookNext next, KwabiQueryDesc queryDesc,
                                           KwabiError *err);
+
+    /* ---- Permission check and planner hooks (appended, still v1) ----
+     *
+     * Same contract as the executor points above. See the body typedefs for the
+     * allowed and planned out-parameters. */
+    KwabiStatus (*hook_register_executor_check_perms)(KwabiExecutorCheckPermsBody body,
+                                                      void *arg);
+    KwabiStatus (*hook_register_planner)(KwabiPlannerBody body, void *arg);
+    KwabiStatus (*hook_next_executor_check_perms)(KwabiHookNext next, KwabiList rangeTable,
+                                                  KwabiList rtePermInfos,
+                                                  int ereport_on_violation, int *allowed,
+                                                  KwabiError *err);
+    KwabiStatus (*hook_next_planner)(KwabiHookNext next, KwabiNode parse,
+                                     const char *queryString, int cursorOptions,
+                                     KwabiParamListInfo boundParams, KwabiNode *planned,
+                                     KwabiError *err);
 
 } KwabiV1;
 

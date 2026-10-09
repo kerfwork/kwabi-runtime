@@ -18,6 +18,7 @@
 
 #include "shim_internal.h"
 #include "executor/executor.h"
+#include "optimizer/planner.h"
 #include "utils/builtins.h"
 
 #define KWABI_HOOK_MAX_BODIES 8
@@ -28,6 +29,8 @@ typedef enum HookPoint
     HOOK_RUN,
     HOOK_FINISH,
     HOOK_END,
+    HOOK_CHECK_PERMS,
+    HOOK_PLANNER,
     HOOK_NPOINTS
 } HookPoint;
 
@@ -54,6 +57,8 @@ static ExecutorStart_hook_type prev_start = NULL;
 static ExecutorRun_hook_type prev_run = NULL;
 static ExecutorFinish_hook_type prev_finish = NULL;
 static ExecutorEnd_hook_type prev_end = NULL;
+static ExecutorCheckPerms_hook_type prev_check_perms = NULL;
+static planner_hook_type prev_planner = NULL;
 
 /* ========================================================================
  * Errors: a PostgreSQL ErrorData becomes a KwabiError, and a KwabiError becomes
@@ -229,6 +234,68 @@ standard_end(QueryDesc *qd, KwabiError *err)
     return status;
 }
 
+static KwabiStatus
+standard_check_perms(List *rangeTable, List *rtePermInfos, bool ereport_on_violation,
+                     int *allowed, KwabiError *err)
+{
+    MemoryContext volatile oldcxt = CurrentMemoryContext;
+    KwabiStatus volatile status = KWABI_OK;
+
+    /* PostgreSQL's built-in checks have already passed when a hook runs, so with no
+     * other hook installed the answer is yes. */
+    *allowed = 1;
+    PG_TRY();
+    {
+        if (prev_check_perms)
+            *allowed = prev_check_perms(rangeTable, rtePermInfos, ereport_on_violation) ? 1 : 0;
+    }
+    PG_CATCH();
+    {
+        ErrorData  *edata;
+
+        MemoryContextSwitchTo(oldcxt);
+        edata = CopyErrorData();
+        FlushErrorState();
+        error_from_edata(err, edata);
+        FreeErrorData(edata);
+        status = KWABI_ERR_RAISED;
+    }
+    PG_END_TRY();
+
+    return status;
+}
+
+static KwabiStatus
+planner_link(Query *parse, const char *query_string, int cursorOptions,
+                 ParamListInfo boundParams, PlannedStmt **planned, KwabiError *err)
+{
+    MemoryContext volatile oldcxt = CurrentMemoryContext;
+    KwabiStatus volatile status = KWABI_OK;
+
+    *planned = NULL;
+    PG_TRY();
+    {
+        if (prev_planner)
+            *planned = prev_planner(parse, query_string, cursorOptions, boundParams);
+        else
+            *planned = standard_planner(parse, query_string, cursorOptions, boundParams);
+    }
+    PG_CATCH();
+    {
+        ErrorData  *edata;
+
+        MemoryContextSwitchTo(oldcxt);
+        edata = CopyErrorData();
+        FlushErrorState();
+        error_from_edata(err, edata);
+        FreeErrorData(edata);
+        status = KWABI_ERR_RAISED;
+    }
+    PG_END_TRY();
+
+    return status;
+}
+
 /* ========================================================================
  * Chains. chain_X(index, ...) runs body `index`, or the standard link once the
  * registered bodies are exhausted. The `next` handle a body receives is a HookLink
@@ -291,6 +358,41 @@ chain_end(int index, QueryDesc *qd, KwabiError *err)
     return standard_end(qd, err);
 }
 
+static KwabiStatus
+chain_check_perms(int index, List *rangeTable, List *rtePermInfos,
+                  bool ereport_on_violation, int *allowed, KwabiError *err)
+{
+    if (index < nbodies[HOOK_CHECK_PERMS])
+    {
+        HookLink    link = {index, false};
+        HookBody   *b = &bodies[HOOK_CHECK_PERMS][index];
+
+        return ((KwabiExecutorCheckPermsBody) b->fn)((KwabiList) rangeTable,
+                                                     (KwabiList) rtePermInfos,
+                                                     ereport_on_violation,
+                                                     (KwabiHookNext) &link,
+                                                     allowed, err, b->arg);
+    }
+    return standard_check_perms(rangeTable, rtePermInfos, ereport_on_violation, allowed, err);
+}
+
+static KwabiStatus
+chain_planner(int index, Query *parse, const char *query_string, int cursorOptions,
+              ParamListInfo boundParams, PlannedStmt **planned, KwabiError *err)
+{
+    if (index < nbodies[HOOK_PLANNER])
+    {
+        HookLink    link = {index, false};
+        HookBody   *b = &bodies[HOOK_PLANNER][index];
+
+        return ((KwabiPlannerBody) b->fn)((KwabiNode) parse, query_string, cursorOptions,
+                                          (KwabiParamListInfo) boundParams,
+                                          (KwabiHookNext) &link,
+                                          (KwabiNode *) planned, err, b->arg);
+    }
+    return planner_link(parse, query_string, cursorOptions, boundParams, planned, err);
+}
+
 /* ========================================================================
  * The trampolines PostgreSQL calls. No PG_TRY, and no body is called under one.
  * A failed chain is raised here, after it has returned.
@@ -348,6 +450,46 @@ trampoline_end(QueryDesc *qd)
         raise_from_error(&err);
 }
 
+static bool
+trampoline_check_perms(List *rangeTable, List *rtePermInfos, bool ereport_on_violation)
+{
+    KwabiError  err;
+    int         allowed = 1;
+
+    kwabi_error_init(&err);
+    if (chain_check_perms(0, rangeTable, rtePermInfos, ereport_on_violation,
+                          &allowed, &err) != KWABI_OK)
+        raise_from_error(&err);
+
+    if (!allowed)
+    {
+        /* A silent denial is an error when the caller asked for one. */
+        if (ereport_on_violation)
+            ereport(ERROR,
+                    (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+                     errmsg("permission denied (kwabi hook)")));
+        return false;
+    }
+    return true;
+}
+
+static PlannedStmt *
+trampoline_planner(Query *parse, const char *query_string, int cursorOptions,
+                   ParamListInfo boundParams)
+{
+    KwabiError  err;
+    PlannedStmt *planned = NULL;
+
+    kwabi_error_init(&err);
+    if (chain_planner(0, parse, query_string, cursorOptions, boundParams,
+                      &planned, &err) != KWABI_OK)
+        raise_from_error(&err);
+
+    if (planned == NULL)
+        ereport(ERROR, (errmsg("kwabi: planner hook returned no plan")));
+    return planned;
+}
+
 /* ========================================================================
  * Registration. The first body on a point installs its trampoline and saves the
  * hook that was there before, which the standard link calls.
@@ -383,6 +525,14 @@ register_body(HookPoint point, void *fn, void *arg)
                 prev_end = ExecutorEnd_hook;
                 ExecutorEnd_hook = trampoline_end;
                 break;
+            case HOOK_CHECK_PERMS:
+                prev_check_perms = ExecutorCheckPerms_hook;
+                ExecutorCheckPerms_hook = trampoline_check_perms;
+                break;
+            case HOOK_PLANNER:
+                prev_planner = planner_hook;
+                planner_hook = trampoline_planner;
+                break;
             default:
                 break;
         }
@@ -413,6 +563,18 @@ static KwabiStatus
 shim_hook_register_executor_end(KwabiExecutorEndBody body, void *arg)
 {
     return register_body(HOOK_END, (void *) body, arg);
+}
+
+static KwabiStatus
+shim_hook_register_executor_check_perms(KwabiExecutorCheckPermsBody body, void *arg)
+{
+    return register_body(HOOK_CHECK_PERMS, (void *) body, arg);
+}
+
+static KwabiStatus
+shim_hook_register_planner(KwabiPlannerBody body, void *arg)
+{
+    return register_body(HOOK_PLANNER, (void *) body, arg);
 }
 
 /* ========================================================================
@@ -471,9 +633,39 @@ shim_hook_next_executor_end(KwabiHookNext next, KwabiQueryDesc qd, KwabiError *e
     return chain_end(link->index + 1, (QueryDesc *) qd, err);
 }
 
+static KwabiStatus
+shim_hook_next_executor_check_perms(KwabiHookNext next, KwabiList rangeTable,
+                                    KwabiList rtePermInfos, int ereport_on_violation,
+                                    int *allowed, KwabiError *err)
+{
+    HookLink   *link = (HookLink *) next;
+
+    if (link == NULL)
+        return next_invalid(err);
+    return chain_check_perms(link->index + 1, (List *) rangeTable, (List *) rtePermInfos,
+                             ereport_on_violation, allowed, err);
+}
+
+static KwabiStatus
+shim_hook_next_planner(KwabiHookNext next, KwabiNode parse, const char *queryString,
+                       int cursorOptions, KwabiParamListInfo boundParams,
+                       KwabiNode *planned, KwabiError *err)
+{
+    HookLink   *link = (HookLink *) next;
+
+    if (link == NULL)
+        return next_invalid(err);
+    return chain_planner(link->index + 1, (Query *) parse, queryString, cursorOptions,
+                         (ParamListInfo) boundParams, (PlannedStmt **) planned, err);
+}
+
 void
 init_group_hook(void)
 {
+    shim_table.hook_register_executor_check_perms = shim_hook_register_executor_check_perms;
+    shim_table.hook_register_planner              = shim_hook_register_planner;
+    shim_table.hook_next_executor_check_perms     = shim_hook_next_executor_check_perms;
+    shim_table.hook_next_planner                  = shim_hook_next_planner;
     shim_table.hook_register_executor_start  = shim_hook_register_executor_start;
     shim_table.hook_register_executor_run    = shim_hook_register_executor_run;
     shim_table.hook_register_executor_finish = shim_hook_register_executor_finish;
@@ -600,4 +792,65 @@ kwabi_hook_test_refuse(PG_FUNCTION_ARGS)
 {
     test_refuse = PG_GETARG_BOOL(0);
     PG_RETURN_BOOL(test_refuse);
+}
+
+/* Permission-check and planner test bodies. The planner runs first for a statement,
+ * so it sets the flag that tells the permission-check body the statement is traced. */
+static bool test_planner_traced = false;
+static bool test_deny = false;
+static bool test_points_installed = false;
+
+static KwabiStatus
+test_planner(KwabiNode parse, const char *queryString, int cursorOptions,
+             KwabiParamListInfo boundParams, KwabiHookNext next, KwabiNode *planned,
+             KwabiError *err, void *arg)
+{
+    test_planner_traced = queryString != NULL && strstr(queryString, "kwt_trace") != NULL;
+    test_record((const char *) arg, test_planner_traced);
+    return shim_api->hook_next_planner(next, parse, queryString, cursorOptions,
+                                       boundParams, planned, err);
+}
+
+static KwabiStatus
+test_check_perms(KwabiList rangeTable, KwabiList rtePermInfos, int ereport_on_violation,
+                 KwabiHookNext next, int *allowed, KwabiError *err, void *arg)
+{
+    test_record((const char *) arg, test_planner_traced);
+    if (test_planner_traced && test_deny)
+    {
+        kwabi_error_init(err);
+        kwabi_error_set_core(err, ERRCODE_INSUFFICIENT_PRIVILEGE, KWABI_ERR_BODY_RAISED,
+                             "denied by kwabi test body");
+        return KWABI_ERR_BODY_RAISED;
+    }
+    return shim_api->hook_next_executor_check_perms(next, rangeTable, rtePermInfos,
+                                                    ereport_on_violation, allowed, err);
+}
+
+PG_FUNCTION_INFO_V1(kwabi_hook_test_install_planner);
+Datum
+kwabi_hook_test_install_planner(PG_FUNCTION_ARGS)
+{
+    if (test_points_installed)
+        PG_RETURN_TEXT_P(cstring_to_text("already installed"));
+
+    if (shim_api == NULL ||
+        shim_api->hook_register_planner == NULL ||
+        shim_api->hook_register_executor_check_perms == NULL)
+        ereport(ERROR, (errmsg("kwabi: planner and check-perms slots are not wired")));
+
+    if (shim_api->hook_register_planner(test_planner, (void *) "P") != KWABI_OK ||
+        shim_api->hook_register_executor_check_perms(test_check_perms, (void *) "C") != KWABI_OK)
+        ereport(ERROR, (errmsg("kwabi: hook registration failed")));
+
+    test_points_installed = true;
+    PG_RETURN_TEXT_P(cstring_to_text("installed"));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_hook_test_deny);
+Datum
+kwabi_hook_test_deny(PG_FUNCTION_ARGS)
+{
+    test_deny = PG_GETARG_BOOL(0);
+    PG_RETURN_BOOL(test_deny);
 }
