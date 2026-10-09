@@ -1101,6 +1101,8 @@ for M in "${MAJORS[@]}"; do
     else
         record FAIL "$M" "explain-api: true=$EXP_TRUE false=$EXP_FALSE control=$EXP_CONTROL index=$EXP_INDEX"
         echo "      see $OUT"
+        # The NOTICEs carry the texts that disagreed; CI must show them.
+        grep -E "NOTICE|explain" "$OUT" | sed 's/^/      /'
     fi
 
     # --- bgworker-api: background worker slots through the ABI ------------

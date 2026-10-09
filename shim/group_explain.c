@@ -262,6 +262,9 @@ explain_abi_matches_sql(const char *sql, bool analyze)
     }
     SPI_finish();
 
+    if (strcmp(from_abi, from_sql.data) != 0)
+        ereport(NOTICE, (errmsg("explain mismatch (analyze=%d)", (int) analyze),
+                         errdetail("abi: [%s] sql: [%s]", from_abi, from_sql.data)));
     return strcmp(from_abi, from_sql.data) == 0;
 }
 
@@ -346,6 +349,8 @@ kwabi_explain_option_version_test(PG_FUNCTION_ARGS)
     generic_ok = explain_option_accepted(es, "generic");
     shim_api->explain_state_free(es);
 
+    ereport(NOTICE, (errmsg("explain option versions: memory=%d settings=%d generic=%d (PG %d)",
+                            (int) memory_ok, (int) settings_ok, (int) generic_ok, PG_VERSION_NUM)));
 #if PG_VERSION_NUM >= 180000
     PG_RETURN_BOOL(memory_ok && settings_ok && generic_ok);
 #elif PG_VERSION_NUM >= 170000
