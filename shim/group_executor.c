@@ -168,10 +168,20 @@ shim_executor_end(KwabiEState estate)
     if (e == NULL)
         return;
 
+    /*
+     * executor_start takes ownership of the QueryDesc. CreateQueryDesc
+     * registered qd->snapshot on the resource owner, and only FreeQueryDesc
+     * releases it; without this the server warns "resource was not closed:
+     * snapshot reference". ExecutorEnd has already unregistered es_snapshot.
+     */
     PG_TRY();
     {
         if (e->queryDesc != NULL)
+        {
             ExecutorEnd(e->queryDesc);
+            FreeQueryDesc(e->queryDesc);
+            e->queryDesc = NULL;
+        }
         if (e->tupstore != NULL)
             tuplestore_end(e->tupstore);
     }
