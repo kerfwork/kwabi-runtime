@@ -40,6 +40,10 @@ DROP FUNCTION IF EXISTS kwabi_planned_stmt_has_modifying_cte(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_has_returning(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_plan_tree(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_result_relations_length(text);
+DROP FUNCTION IF EXISTS kwabi_plan_rtable_length(text);
+DROP FUNCTION IF EXISTS kwabi_plan_result_relations_length(text);
+DROP FUNCTION IF EXISTS kwabi_plan_has_returning(text);
+DROP FUNCTION IF EXISTS kwabi_plan_has_modifying_cte(text);
 DROP FUNCTION IF EXISTS kwabi_query_limit_count(text);
 DROP FUNCTION IF EXISTS kwabi_query_limit_offset(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_rtable_length(sql text);
@@ -112,6 +116,14 @@ CREATE FUNCTION kwabi_planned_stmt_result_relations_length(sql text)
     RETURNS int4 AS :'bundle','kwabi_planned_stmt_result_relations_length' LANGUAGE C;
 CREATE FUNCTION kwabi_planned_stmt_rtable_length(sql text)
     RETURNS int4 AS :'bundle','kwabi_planned_stmt_rtable_length' LANGUAGE C;
+CREATE FUNCTION kwabi_plan_rtable_length(sql text)
+    RETURNS int4 AS :'bundle','kwabi_plan_rtable_length' LANGUAGE C;
+CREATE FUNCTION kwabi_plan_result_relations_length(sql text)
+    RETURNS int4 AS :'bundle','kwabi_plan_result_relations_length' LANGUAGE C;
+CREATE FUNCTION kwabi_plan_has_returning(sql text)
+    RETURNS bool AS :'bundle','kwabi_plan_has_returning' LANGUAGE C;
+CREATE FUNCTION kwabi_plan_has_modifying_cte(sql text)
+    RETURNS bool AS :'bundle','kwabi_plan_has_modifying_cte' LANGUAGE C;
 CREATE FUNCTION kwabi_planner_estimate_rows_test()
     RETURNS float8 AS :'bundle','kwabi_planner_estimate_rows_test' LANGUAGE C;
 CREATE FUNCTION kwabi_planner_info_test(sql text)
@@ -275,6 +287,17 @@ SELECT kwabi_planned_stmt_has_modifying_cte('SELECT 1') = false AS no_modifying_
 \echo '=== 15. planned stmt has returning ==='
 \echo '   SELECT 1 parses to a Query, not a PlannedStmt, so has_returning is false'
 SELECT kwabi_planned_stmt_has_returning('SELECT 1') = false AS no_returning_for_query;
+
+\echo ''
+\echo '=== 15e. planned_stmt positive: a real PlannedStmt from pg_plan_query ==='
+\echo '   plans only; the DML is never executed'
+SELECT kwabi_plan_rtable_length('SELECT 1 FROM pg_class') = 1 AS plan_rtable_length;
+SELECT kwabi_plan_result_relations_length('UPDATE pg_class SET relname = relname WHERE false') = 1 AS plan_result_relations;
+SELECT kwabi_plan_result_relations_length('SELECT 1') = 0 AS plan_result_relations_select;
+SELECT kwabi_plan_has_returning('UPDATE pg_class SET relname = relname WHERE false RETURNING relname') AS plan_has_returning;
+SELECT kwabi_plan_has_returning('UPDATE pg_class SET relname = relname WHERE false') = false AS plan_no_returning;
+SELECT kwabi_plan_has_modifying_cte('WITH d AS (DELETE FROM pg_class WHERE false RETURNING 1) SELECT 1') AS plan_modifying_cte;
+SELECT kwabi_plan_has_modifying_cte('SELECT 1') = false AS plan_no_modifying_cte;
 
 \echo ''
 \echo '=== 15c. planner_estimate_rows ==='

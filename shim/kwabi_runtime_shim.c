@@ -27,6 +27,7 @@
  */
 
 #include "shim_internal.h"
+#include "tcop/tcopprot.h"           /* pg_plan_query */
 
 /* ---- shim-provided stable slots -------------------------------------- */
 
@@ -4522,4 +4523,52 @@ kwabi_planned_stmt_has_returning(PG_FUNCTION_ARGS)
     KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_has_returning == NULL);
     KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
     PG_RETURN_BOOL(shim_api->planned_stmt_has_returning(node));
+}
+
+/*
+ * Positive planned-statement wrappers. Each analyzes SQL, plans it with
+ * pg_plan_query (planning only; nothing is executed), and reads the result
+ * through the planned_stmt slot. The DML in these statements is never run.
+ */
+static KwabiNode
+kwabi_test_plan(text *arg)
+{
+    KwabiNode query = kwabi_test_parse(arg);
+    return (KwabiNode) pg_plan_query((Query *) query, NULL, 0, NULL);
+}
+
+PG_FUNCTION_INFO_V1(kwabi_plan_rtable_length);
+Datum
+kwabi_plan_rtable_length(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_rtable == NULL || shim_api->node_list_length == NULL);
+    KwabiNode plan = kwabi_test_plan(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_INT32(shim_api->node_list_length((KwabiNode) shim_api->planned_stmt_rtable(plan)));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_plan_result_relations_length);
+Datum
+kwabi_plan_result_relations_length(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_result_relations == NULL || shim_api->node_list_length == NULL);
+    KwabiNode plan = kwabi_test_plan(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_INT32(shim_api->node_list_length((KwabiNode) shim_api->planned_stmt_result_relations(plan)));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_plan_has_returning);
+Datum
+kwabi_plan_has_returning(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_has_returning == NULL);
+    KwabiNode plan = kwabi_test_plan(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_BOOL(shim_api->planned_stmt_has_returning(plan));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_plan_has_modifying_cte);
+Datum
+kwabi_plan_has_modifying_cte(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_has_modifying_cte == NULL);
+    KwabiNode plan = kwabi_test_plan(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_BOOL(shim_api->planned_stmt_has_modifying_cte(plan));
 }
