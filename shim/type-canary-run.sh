@@ -18,15 +18,18 @@ port="${CANARY_PORT:-$((5950 + major))}"
 data="$SCRATCH/type-canary-pg$major"
 v1="$SCRATCH/uint_body_v1.$dl"
 v2="$SCRATCH/uint_body_v2.$dl"
-inc=$PWD/../vendor/kwabi/include
 fail=0
 
 check() {
   if [ "$2" = "$3" ]; then echo "  PASS $1 ($3)"; else echo "  FAIL $1: want '$2' got '$3'"; fail=1; fi
 }
 
-cc -shared -fPIC -Wall -Wextra -I"$inc" -DOUT_PREFIX='""' -o "$v1" canary-uint/uint_body.c
-cc -shared -fPIC -Wall -Wextra -I"$inc" -DOUT_PREFIX='"u"' -o "$v2" canary-uint/uint_body.c
+# The body is the Rust uint core (canary-uint). The prefix is compile-time, so v1 and v2
+# are two builds; cargo rebuilds the same target path, so each is copied out after building.
+(cd canary-uint && KWABI_CANARY_PREFIX="" cargo build --release --quiet \
+    && cp "target/release/libkwabi_uint_canary.$dl" "$v1" \
+    && KWABI_CANARY_PREFIX="u" cargo build --release --quiet \
+    && cp "target/release/libkwabi_uint_canary.$dl" "$v2")
 
 "$bin/pg_ctl" -D "$data" -m fast stop >/dev/null 2>&1 || true
 rm -rf "$data"
