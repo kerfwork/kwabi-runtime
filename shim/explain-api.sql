@@ -61,10 +61,17 @@ SELECT kwabi_explain_control() AS control_should_not_return;
 
 \echo ''
 \echo ''
+-- A private, fixed table for the scan checks. A catalog such as pg_class changes
+-- under concurrent sessions and on Linux the planner picks an index-only scan on it,
+-- so ABI and SQL row counts drift between two statements. Three rows never do.
+DROP TABLE IF EXISTS kwabi_explain_t;
+CREATE TABLE kwabi_explain_t AS SELECT g AS v FROM generate_series(1, 3) g;
+ANALYZE kwabi_explain_t;
+
 \echo '=== 4. ExplainState through the ABI: EXPLAIN text must equal SQL EXPLAIN (COSTS OFF) ==='
 \echo '   the text from explain_query on a shim-owned ExplainState, byte for byte'
 SELECT kwabi_explain_matches_sql_test('SELECT 1') AS explain_matches_select;
-SELECT kwabi_explain_matches_sql_test('SELECT 1 FROM pg_class') AS explain_matches_scan;
+SELECT kwabi_explain_matches_sql_test('SELECT v FROM kwabi_explain_t') AS explain_matches_scan;
 
 \echo ''
 \echo '=== 5. an unknown EXPLAIN option must raise through the ABI ==='
@@ -72,7 +79,7 @@ SELECT kwabi_explain_bad_option_test() AS explain_bad_option_raises;
 
 \echo ''
 \echo '=== 6. EXPLAIN ANALYZE through the ABI: runs the plan; text must equal SQL EXPLAIN ANALYZE ==='
-SELECT kwabi_explain_analyze_matches_sql_test('SELECT 1 FROM pg_class') AS explain_analyze_matches_scan;
+SELECT kwabi_explain_analyze_matches_sql_test('SELECT v FROM kwabi_explain_t') AS explain_analyze_matches_scan;
 
 \echo ''
 \echo '=== 7. version-specific options are accepted only on the majors that have them ==='
