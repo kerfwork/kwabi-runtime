@@ -56,10 +56,6 @@ DROP FUNCTION IF EXISTS kwabi_walsender_is_connected_test();
 DROP FUNCTION IF EXISTS kwabi_node_control();
 DROP FUNCTION IF EXISTS kwabi_planner_info_test(text);
 DROP FUNCTION IF EXISTS kwabi_free_planner_info_test();
-DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_changes_test();
-DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_lsn_test();
-DROP FUNCTION IF EXISTS kwabi_logical_decoding_begin_test();
-DROP FUNCTION IF EXISTS kwabi_logical_decoding_end_test();
 DROP FUNCTION IF EXISTS kwabi_sequence_nextval_test();
 DROP FUNCTION IF EXISTS kwabi_trigger_get_test();
 DROP FUNCTION IF EXISTS kwabi_trigger_desc_test();
@@ -142,14 +138,6 @@ CREATE FUNCTION kwabi_walsender_is_connected_test()
     RETURNS bool AS :'bundle','kwabi_walsender_is_connected_test' LANGUAGE C;
 CREATE FUNCTION kwabi_node_control()
     RETURNS bool AS :'bundle','kwabi_node_control' LANGUAGE C;
-CREATE FUNCTION kwabi_reorderbuffer_get_changes_test()
-    RETURNS bool AS :'bundle','kwabi_reorderbuffer_get_changes_test' LANGUAGE C;
-CREATE FUNCTION kwabi_reorderbuffer_get_lsn_test()
-    RETURNS bool AS :'bundle','kwabi_reorderbuffer_get_lsn_test' LANGUAGE C;
-CREATE FUNCTION kwabi_logical_decoding_begin_test()
-    RETURNS bool AS :'bundle','kwabi_logical_decoding_begin_test' LANGUAGE C;
-CREATE FUNCTION kwabi_logical_decoding_end_test()
-    RETURNS bool AS :'bundle','kwabi_logical_decoding_end_test' LANGUAGE C;
 CREATE FUNCTION kwabi_sequence_nextval_test()
     RETURNS int8 AS :'bundle','kwabi_sequence_nextval_test' LANGUAGE C;
 CREATE FUNCTION kwabi_sequence_currval_test()
@@ -350,27 +338,11 @@ SELECT kwabi_node_control() AS control_should_not_return;
 \echo '=== 17. the backend survived all of the above ==='
 SELECT kwabi_node_type('SELECT 42') = 1 AS after_control;
 
-\echo ''
-\echo '=== 18. reorderbuffer_get_changes ==='
-\echo '   reorderbuffer_get_changes must raise "not supported by this shim"'
-SELECT kwabi_reorderbuffer_get_changes_test() AS reorderbuffer_get_changes;
 
-\echo ''
-\echo '=== 15b. reorderbuffer_get_lsn ==='
-\echo '   reorderbuffer_get_lsn must raise "not supported by this shim"'
-SELECT kwabi_reorderbuffer_get_lsn_test() AS reorderbuffer_get_lsn;
 
 \echo ''
 
-\echo ''
-\echo '=== 19. logical_decoding_begin ==='
-\echo '   logical_decoding_begin must raise "not supported by this shim", never return a context'
-SELECT kwabi_logical_decoding_begin_test() AS logical_decoding_begin;
 
-\echo ''
-\echo '=== 20. logical_decoding_end ==='
-\echo '   logical_decoding_end(NULL) must return normally'
-SELECT kwabi_logical_decoding_end_test() AS logical_decoding_end;
 
 \echo ''
 
@@ -443,22 +415,12 @@ SELECT kwabi_syslogger_log_test() = true AS syslogger_log;
 
 \echo ''
 DROP FUNCTION IF EXISTS kwabi_node_get_list_test();
-DROP FUNCTION IF EXISTS kwabi_logical_decoding_read_test();
-DROP FUNCTION IF EXISTS kwabi_reorderbuffer_get_xid_test();
 CREATE FUNCTION kwabi_node_get_list_test()
     RETURNS bool AS :'bundle','kwabi_node_get_list_test' LANGUAGE C;
-CREATE FUNCTION kwabi_logical_decoding_read_test()
-    RETURNS bool AS :'bundle','kwabi_logical_decoding_read_test' LANGUAGE C;
-CREATE FUNCTION kwabi_reorderbuffer_get_xid_test()
-    RETURNS bool AS :'bundle','kwabi_reorderbuffer_get_xid_test' LANGUAGE C;
 
 \echo '=== node_get_list: node_get_list returns the target list of SELECT 1, 2; NULL gives NULL ==='
 SELECT kwabi_node_get_list_test() AS node_get_list;
 
-\echo '=== logical_decoding_read: logical_decoding_read raises not supported ==='
-SELECT kwabi_logical_decoding_read_test() AS logical_decoding_read;
 
-\echo '=== reorderbuffer_get_xid: reorderbuffer_get_xid raises not supported ==='
-SELECT kwabi_reorderbuffer_get_xid_test() AS reorderbuffer_get_xid;
 
 \echo '=== node-tree-api tests complete ==='

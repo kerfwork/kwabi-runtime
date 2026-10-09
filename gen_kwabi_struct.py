@@ -78,7 +78,6 @@ HANDLES = {
     "KwabiMemoryContext": "c_void",
     "KwabiPlannerInfo": "c_void",
     "KwabiLogicalDecodingCtx": "c_void",
-    "KwabiReorderBuffer": "c_void",
     "KwabiFmgrInfo": "c_void",
     "KwabiSPIResult": "c_void",
     "KwabiSPIPlan": "c_void",

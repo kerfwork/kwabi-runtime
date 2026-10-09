@@ -172,10 +172,11 @@ pub struct KwabiV1 {
     pub sequence_nextval: Option<unsafe extern "C" fn(u32) -> i64>,
     pub sequence_currval: Option<unsafe extern "C" fn(u32) -> i64>,
     pub sequence_setval: Option<unsafe extern "C" fn(u32, i64) -> i64>,
-    pub logical_decoding_begin: Option<unsafe extern "C" fn(*const c_char, i64) -> *mut c_void>,
-    pub logical_decoding_end: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
+    pub logical_decoding_begin: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
     pub logical_decoding_read:
-        Option<unsafe extern "C" fn(*mut c_void, *mut i64, *mut c_void) -> bool>,
+        Option<unsafe extern "C" fn(*mut c_void, *mut i64, *mut i32, *mut *const c_char) -> bool>,
+    pub logical_decoding_confirm: Option<unsafe extern "C" fn(*mut c_void, i64) -> ()>,
+    pub logical_decoding_end: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub output_plugin_startup: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub output_plugin_shutdown: Option<unsafe extern "C" fn(*mut c_void) -> ()>,
     pub bgworker_register:
@@ -330,9 +331,6 @@ pub struct KwabiV1 {
     pub trigger_desc: Option<unsafe extern "C" fn(u32) -> *mut c_void>,
     pub trigger_count: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     pub trigger_get: Option<unsafe extern "C" fn(*mut c_void, c_int) -> *mut c_void>,
-    pub reorderbuffer_get_lsn: Option<unsafe extern "C" fn(*mut c_void) -> i64>,
-    pub reorderbuffer_get_xid: Option<unsafe extern "C" fn(*mut c_void, u32) -> i64>,
-    pub reorderbuffer_get_changes: Option<unsafe extern "C" fn(*mut c_void, u32) -> c_int>,
     pub slot_get_lsn: Option<unsafe extern "C" fn(*const c_char) -> i64>,
     pub slot_get_catalog_xmin: Option<unsafe extern "C" fn(*const c_char) -> i64>,
     pub slot_is_active: Option<unsafe extern "C" fn(*const c_char) -> bool>,
@@ -366,7 +364,7 @@ pub struct KwabiV1 {
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 208;
+    pub const FIELD_COUNT: usize = 206;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -413,8 +411,9 @@ impl Default for KwabiV1 {
             sequence_currval: None,
             sequence_setval: None,
             logical_decoding_begin: None,
-            logical_decoding_end: None,
             logical_decoding_read: None,
+            logical_decoding_confirm: None,
+            logical_decoding_end: None,
             output_plugin_startup: None,
             output_plugin_shutdown: None,
             bgworker_register: None,
@@ -552,9 +551,6 @@ impl Default for KwabiV1 {
             trigger_desc: None,
             trigger_count: None,
             trigger_get: None,
-            reorderbuffer_get_lsn: None,
-            reorderbuffer_get_xid: None,
-            reorderbuffer_get_changes: None,
             slot_get_lsn: None,
             slot_get_catalog_xmin: None,
             slot_is_active: None,

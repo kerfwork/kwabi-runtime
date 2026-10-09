@@ -106,6 +106,18 @@ slru_port_for() {
     esac
 }
 
+logical_port_for() {
+    case "$1" in
+        16) echo 5474 ;;
+        17) echo 5473 ;;
+        18) echo 5472 ;;
+    esac
+}
+
+logical_data_for() {
+    echo "${TMPDIR:-/tmp}/kwabi-logical-pg$1"
+}
+
 slru_data_for() {
     echo "${TMPDIR:-/tmp}/kwabi-slru-pg$1"
 }
@@ -1232,6 +1244,56 @@ for M in "${MAJORS[@]}"; do
             "$PGB/pg_ctl" -D "$SLRU_DATA" -w stop >/dev/null 2>&1 || true
     fi
     rm -rf "$SLRU_DATA"
+    # --- logical-api: logical decoding against its OWN wal_level=logical cluster
+    #
+    # Logical slots need wal_level = logical, which the matrix server does not
+    # set, and the long-running servers are left alone. This stage starts a
+    # throwaway cluster with it, runs the test, and tears it down.
+    LOGICAL_PORT=$(logical_port_for "$M")
+    LOGICAL_DATA=$(logical_data_for "$M")
+    echo "  [logical-api] logical decoding against a wal_level=logical cluster on :$LOGICAL_PORT"
+
+    rm -rf "$LOGICAL_DATA"
+    LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" \
+        "$PGB/initdb" -D "$LOGICAL_DATA" -U "$(whoami)" \
+        --encoding=UTF8 --locale=C >/dev/null 2>&1
+    printf "wal_level = logical\nmax_replication_slots = 4\nport = %s\nlisten_addresses = 'localhost'\nunix_socket_directories = '%s'\n" \
+        "$LOGICAL_PORT" "$PSOCK" > "$LOGICAL_DATA/postgresql.auto.conf"
+
+    OUT=/tmp/kwabi_logical_$M.log
+    LOGICAL_STARTED=0
+    if LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" \
+        "$PGB/pg_ctl" -D "$LOGICAL_DATA" -l "$LOGICAL_DATA/server.log" -w start >/dev/null 2>&1; then
+        LOGICAL_STARTED=1
+    fi
+
+    if [ $LOGICAL_STARTED -eq 0 ]; then
+        record FAIL "$M" "logical-api: wal_level=logical cluster would not start"
+        echo "      see $LOGICAL_DATA/server.log"
+        tail -3 "$LOGICAL_DATA/server.log" 2>/dev/null | sed 's/^/      /'
+    else
+        "$PGB/psql" -h "$PSOCK" -p "$LOGICAL_PORT" -v ON_ERROR_STOP=0 \
+            -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
+            -f logical-api.sql postgres >"$OUT" 2>&1
+
+        LOG_TRUE=$(grep -cE '^ t *$' "$OUT")
+        LOG_FALSE=$(grep -cE '^ f *$' "$OUT")
+        LOG_READ=$(grep -A2 'logical_read' "$OUT" | grep -cE '^ t')
+        LOG_AFTER=$(grep -A2 'logical_after_confirm' "$OUT" | grep -cE '^ t')
+        LOG_MISSING=$(grep -A2 'logical_missing_slot' "$OUT" | grep -cE '^ t')
+
+        if [ "$LOG_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && \
+           [ "$LOG_READ" -ge 1 ] && [ "$LOG_AFTER" -ge 1 ] && [ "$LOG_MISSING" -ge 1 ]; then
+            record PASS "$M" "logical-api green ($LOG_TRUE assertions)"
+        else
+            record FAIL "$M" "logical-api: true=$LOG_TRUE false=$LOG_FALSE errors=$(unexpected_errors "$OUT") read=$LOG_READ after=$LOG_AFTER missing=$LOG_MISSING"
+            echo "      see $OUT"
+        fi
+
+        LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" \
+            "$PGB/pg_ctl" -D "$LOGICAL_DATA" -w stop >/dev/null 2>&1 || true
+    fi
+    rm -rf "$LOGICAL_DATA"
 done
 
 # ---------------------------------------------------------------------------

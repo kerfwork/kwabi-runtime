@@ -133,11 +133,12 @@ pub struct KwabiV1 {
     pub sequence_currval: Option<extern "C" fn(u32) -> i64>,
     pub sequence_setval: Option<extern "C" fn(u32, i64) -> i64>,
     pub logical_decoding_begin:
-        Option<extern "C" fn(*const c_char, i64) -> *mut KwabiLogicalDecodingCtx>,
-    pub logical_decoding_end: Option<extern "C" fn(*mut KwabiLogicalDecodingCtx)>,
+        Option<extern "C" fn(*const c_char) -> *mut KwabiLogicalDecodingCtx>,
     pub logical_decoding_read: Option<
-        extern "C" fn(*mut KwabiLogicalDecodingCtx, *mut i64, *mut *mut std::ffi::c_void) -> bool,
+        extern "C" fn(*mut KwabiLogicalDecodingCtx, *mut i64, *mut i32, *mut *const c_char) -> bool,
     >,
+    pub logical_decoding_confirm: Option<extern "C" fn(*mut KwabiLogicalDecodingCtx, i64)>,
+    pub logical_decoding_end: Option<extern "C" fn(*mut KwabiLogicalDecodingCtx)>,
     pub output_plugin_startup: Option<extern "C" fn(*mut std::ffi::c_void)>,
     pub output_plugin_shutdown: Option<extern "C" fn(*mut std::ffi::c_void)>,
     pub bgworker_register: Option<
@@ -333,9 +334,6 @@ pub struct KwabiV1 {
     pub trigger_desc: Option<extern "C" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>,
     pub trigger_count: Option<extern "C" fn(*mut std::ffi::c_void) -> i32>,
     pub trigger_get: Option<extern "C" fn(*mut std::ffi::c_void, i32) -> *mut std::ffi::c_void>,
-    pub reorderbuffer_get_lsn: Option<extern "C" fn(*mut KwabiReorderBuffer) -> i64>,
-    pub reorderbuffer_get_xid: Option<extern "C" fn(*mut KwabiReorderBuffer, u32) -> i64>,
-    pub reorderbuffer_get_changes: Option<extern "C" fn(*mut KwabiReorderBuffer, u32) -> i32>,
     pub slot_get_lsn: Option<extern "C" fn(*const c_char) -> i64>,
     pub slot_get_catalog_xmin: Option<extern "C" fn(*const c_char) -> i64>,
     pub slot_is_active: Option<extern "C" fn(*const c_char) -> bool>,
@@ -522,6 +520,23 @@ impl std::error::Error for KwabiError {}
 // ========================================================================
 
 impl Kwabi {
+    /// Open a logical decoding handle on a slot. Nothing is consumed.
+    ///
+    /// Raises a PostgreSQL error if the slot does not exist or cannot be decoded.
+    /// Call it where an error may be caught, such as a guarded body.
+    pub fn logical_decoding_begin(&self, slot: &str) -> LogicalDecodingCtx<'_> {
+        let name = std::ffi::CString::new(slot).expect("slot name has no NUL");
+        let begin = self
+            .api
+            .logical_decoding_begin
+            .expect("logical_decoding_begin");
+        let handle = begin(name.as_ptr());
+        LogicalDecodingCtx {
+            handle,
+            kwabi: self,
+        }
+    }
+
     /// Create a new Kwabi instance from the function table.
     ///
     /// Every ABI slot except the transactions API, one unsafe method each.
@@ -1212,22 +1227,50 @@ impl<'a> Drop for MemoryContext<'a> {
 // LogicalDecodingCtx implementation
 // ========================================================================
 
+/// One change from a logical slot: the LSN it was decoded at, the xid of the
+/// transaction it belongs to, and the slot's output plugin text for it.
+pub struct LogicalChange<'a> {
+    pub lsn: i64,
+    pub xid: u32,
+    pub text: &'a std::ffi::CStr,
+}
+
 impl<'a> LogicalDecodingCtx<'a> {
-    /// Read the next logical decoding change.
-    pub fn read(&self) -> Option<(i64, *mut std::ffi::c_void)> {
+    /// The next change, in commit order. `None` when the batch is exhausted.
+    ///
+    /// Takes `&mut self`: the text borrows the handle's storage, which the next
+    /// read replaces.
+    pub fn read(&mut self) -> Option<LogicalChange<'_>> {
         let mut lsn: i64 = 0;
-        let mut data: *mut std::ffi::c_void = ptr::null_mut();
-        let success =
-            (self
-                .kwabi
-                .api
-                .logical_decoding_read
-                .expect("logical_decoding_read"))(self.handle, &mut lsn, &mut data);
-        if success {
-            Some((lsn, data))
+        let mut xid: i32 = 0;
+        let mut data: *const c_char = ptr::null();
+        let read = self
+            .kwabi
+            .api
+            .logical_decoding_read
+            .expect("logical_decoding_read");
+        if read(self.handle, &mut lsn, &mut xid, &mut data) {
+            // The runtime keeps the text alive until the next read or the drop.
+            let text = unsafe { std::ffi::CStr::from_ptr(data) };
+            Some(LogicalChange {
+                lsn,
+                xid: xid as u32,
+                text,
+            })
         } else {
             None
         }
+    }
+
+    /// Advance the slot past `lsn`. The caller passes the LSN of the last change
+    /// it has durably processed. A value past the last change read raises.
+    pub fn confirm(&self, lsn: i64) {
+        let confirm = self
+            .kwabi
+            .api
+            .logical_decoding_confirm
+            .expect("logical_decoding_confirm");
+        confirm(self.handle, lsn)
     }
 }
 

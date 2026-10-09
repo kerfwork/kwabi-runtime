@@ -509,64 +509,6 @@ shim_sequence_setval(Oid seq_oid, int64 value)
 }
 
 
-/*
- * Logical decoding and reorderbuffer are not implemented by this shim. The
- * wave brief marks these slots "Can raise", so they raise a named error
- * rather than return an empty value that looks like success. begin never
- * yields a context, so end has nothing to release for NULL.
- */
-static KwabiLogicalDecodingCtx
-shim_logical_decoding_begin(const char *slot_name, int64 start_lsn)
-{
-    (void) slot_name;
-    (void) start_lsn;
-    ereport(ERROR, (errmsg("kwabi: logical decoding is not supported by this shim")));
-    return NULL;
-}
-
-static void
-shim_logical_decoding_end(KwabiLogicalDecodingCtx ctx)
-{
-    (void) ctx;
-}
-
-static bool
-shim_logical_decoding_read(KwabiLogicalDecodingCtx ctx, int64 *lsn, StringInfo data)
-{
-    (void) ctx;
-    (void) lsn;
-    (void) data;
-    ereport(ERROR, (errmsg("kwabi: logical decoding is not supported by this shim")));
-    return false;
-}
-
-static int
-shim_reorderbuffer_get_changes(KwabiReorderBuffer rb, TransactionId xid)
-{
-    (void) rb;
-    (void) xid;
-    ereport(ERROR, (errmsg("kwabi: reorderbuffer is not supported by this shim")));
-    return 0;
-}
-
-static int64
-shim_reorderbuffer_get_lsn(KwabiReorderBuffer rb)
-{
-    (void) rb;
-    ereport(ERROR, (errmsg("kwabi: reorderbuffer is not supported by this shim")));
-    return 0;
-}
-
-static int64
-shim_reorderbuffer_get_xid(KwabiReorderBuffer rb, TransactionId xid)
-{
-    (void) rb;
-    (void) xid;
-    ereport(ERROR, (errmsg("kwabi: reorderbuffer is not supported by this shim")));
-    return 0;
-}
-
-
 void
 init_group_node(void)
 {
@@ -599,12 +541,6 @@ init_group_node(void)
     shim_table.sequence_nextval = shim_sequence_nextval;
     shim_table.sequence_currval = shim_sequence_currval;
     shim_table.sequence_setval = shim_sequence_setval;
-    shim_table.logical_decoding_begin = shim_logical_decoding_begin;
-    shim_table.logical_decoding_end = shim_logical_decoding_end;
-    shim_table.logical_decoding_read = shim_logical_decoding_read;
-    shim_table.reorderbuffer_get_changes = shim_reorderbuffer_get_changes;
-    shim_table.reorderbuffer_get_lsn = shim_reorderbuffer_get_lsn;
-    shim_table.reorderbuffer_get_xid = shim_reorderbuffer_get_xid;
     shim_table.walsender_is_connected = shim_walsender_is_connected;
     shim_table.walsender_send = shim_walsender_send;
     shim_table.walsender_receive = shim_walsender_receive;
@@ -1345,96 +1281,6 @@ kwabi_sequence_setval_test(PG_FUNCTION_ARGS)
     PG_RETURN_INT64(result);
 }
 
-/*
- * Run a slot call that must raise, and report whether it raised with the
- * expected message. A call that returns normally is a failure.
- */
-static bool
-slot_raises_not_supported(void (*call)(void))
-{
-    bool ok = false;
-
-    PG_TRY();
-    {
-        call();
-    }
-    PG_CATCH();
-    {
-        ErrorData *edata = CopyErrorData();
-        ok = (strstr(edata->message, "not supported by this shim") != NULL);
-        FreeErrorData(edata);
-        FlushErrorState();
-    }
-    PG_END_TRY();
-
-    return ok;
-}
-
-static void call_logical_decoding_begin(void) { (void) shim_api->logical_decoding_begin(NULL, 0); }
-static void call_reorderbuffer_get_changes(void) { (void) shim_api->reorderbuffer_get_changes(NULL, InvalidTransactionId); }
-static void call_reorderbuffer_get_lsn(void) { (void) shim_api->reorderbuffer_get_lsn(NULL); }
-
-/*
- * kwabi_logical_decoding_begin_test() -> bool
- *
- * logical_decoding_begin must raise "not supported", never return a context.
- */
-PG_FUNCTION_INFO_V1(kwabi_logical_decoding_begin_test);
-
-Datum
-kwabi_logical_decoding_begin_test(PG_FUNCTION_ARGS)
-{
-    if (shim_api == NULL || shim_api->logical_decoding_begin == NULL)
-        ereport(ERROR, (errmsg("kwabi: logical_decoding_begin is not wired")));
-
-    PG_RETURN_BOOL(slot_raises_not_supported(call_logical_decoding_begin));
-}
-
-/*
- * kwabi_logical_decoding_end_test() -> bool
- *
- * logical_decoding_end(NULL) has nothing to release and must return normally.
- */
-PG_FUNCTION_INFO_V1(kwabi_logical_decoding_end_test);
-
-Datum
-kwabi_logical_decoding_end_test(PG_FUNCTION_ARGS)
-{
-    if (shim_api == NULL || shim_api->logical_decoding_end == NULL)
-        ereport(ERROR, (errmsg("kwabi: logical_decoding_end is not wired")));
-
-    shim_api->logical_decoding_end(NULL);
-    PG_RETURN_BOOL(true);
-}
-
-/*
- * kwabi_reorderbuffer_get_changes_test() -> bool
- */
-PG_FUNCTION_INFO_V1(kwabi_reorderbuffer_get_changes_test);
-
-Datum
-kwabi_reorderbuffer_get_changes_test(PG_FUNCTION_ARGS)
-{
-    if (shim_api == NULL || shim_api->reorderbuffer_get_changes == NULL)
-        ereport(ERROR, (errmsg("kwabi: reorderbuffer_get_changes is not wired")));
-
-    PG_RETURN_BOOL(slot_raises_not_supported(call_reorderbuffer_get_changes));
-}
-
-/*
- * kwabi_reorderbuffer_get_lsn_test() -> bool
- */
-PG_FUNCTION_INFO_V1(kwabi_reorderbuffer_get_lsn_test);
-
-Datum
-kwabi_reorderbuffer_get_lsn_test(PG_FUNCTION_ARGS)
-{
-    if (shim_api == NULL || shim_api->reorderbuffer_get_lsn == NULL)
-        ereport(ERROR, (errmsg("kwabi: reorderbuffer_get_lsn is not wired")));
-
-    PG_RETURN_BOOL(slot_raises_not_supported(call_reorderbuffer_get_lsn));
-}
-
 /* ---- proof functions for node_get_list and the two stub slots -------- */
 
 /*
@@ -1463,34 +1309,4 @@ kwabi_node_get_list_test(PG_FUNCTION_ARGS)
     ok = (list != NULL && shim_api->node_list_length((KwabiNode) list) == 2);
     ok = ok && (shim_api->node_get_list(NULL) == NULL);
     PG_RETURN_BOOL(ok);
-}
-
-/*
- * kwabi_logical_decoding_read_test() -> bool
- * kwabi_reorderbuffer_get_xid_test() -> bool
- *
- * Both raise "not supported by this shim", as the other logical decoding and
- * reorderbuffer slots do. Each must raise, not return a value.
- */
-static void call_logical_decoding_read(void) { int64 lsn = 0; (void) shim_api->logical_decoding_read(NULL, &lsn, NULL); }
-static void call_reorderbuffer_get_xid(void) { (void) shim_api->reorderbuffer_get_xid(NULL, InvalidTransactionId); }
-
-PG_FUNCTION_INFO_V1(kwabi_logical_decoding_read_test);
-
-Datum
-kwabi_logical_decoding_read_test(PG_FUNCTION_ARGS)
-{
-    if (shim_api == NULL || shim_api->logical_decoding_read == NULL)
-        ereport(ERROR, (errmsg("kwabi: logical_decoding_read is not wired")));
-    PG_RETURN_BOOL(slot_raises_not_supported(call_logical_decoding_read));
-}
-
-PG_FUNCTION_INFO_V1(kwabi_reorderbuffer_get_xid_test);
-
-Datum
-kwabi_reorderbuffer_get_xid_test(PG_FUNCTION_ARGS)
-{
-    if (shim_api == NULL || shim_api->reorderbuffer_get_xid == NULL)
-        ereport(ERROR, (errmsg("kwabi: reorderbuffer_get_xid is not wired")));
-    PG_RETURN_BOOL(slot_raises_not_supported(call_reorderbuffer_get_xid));
 }

@@ -416,15 +416,11 @@ impl<'a> Raw<'a> {
     ///
     /// The runtime must provide this slot with exactly this signature, and
     /// every pointer argument must be valid for the use the slot makes of it.
-    pub unsafe fn logical_decoding_begin(
-        &self,
-        a0: *const c_char,
-        a1: i64,
-    ) -> *mut KwabiLogicalDecodingCtx {
+    pub unsafe fn logical_decoding_begin(&self, a0: *const c_char) -> *mut KwabiLogicalDecodingCtx {
         (self
             .api
             .logical_decoding_begin
-            .expect("logical_decoding_begin"))(a0, a1)
+            .expect("logical_decoding_begin"))(a0)
     }
 
     /// Slot `logical_decoding_end`.
@@ -447,12 +443,26 @@ impl<'a> Raw<'a> {
         &self,
         a0: *mut KwabiLogicalDecodingCtx,
         a1: *mut i64,
-        a2: *mut *mut std::ffi::c_void,
+        a2: *mut i32,
+        a3: *mut *const c_char,
     ) -> bool {
         (self
             .api
             .logical_decoding_read
-            .expect("logical_decoding_read"))(a0, a1, a2)
+            .expect("logical_decoding_read"))(a0, a1, a2, a3)
+    }
+
+    /// Slot `logical_decoding_confirm`.
+    ///
+    /// # Safety
+    ///
+    /// The runtime must provide this slot with exactly this signature, and
+    /// every pointer argument must be valid for the use the slot makes of it.
+    pub unsafe fn logical_decoding_confirm(&self, a0: *mut KwabiLogicalDecodingCtx, a1: i64) {
+        (self
+            .api
+            .logical_decoding_confirm
+            .expect("logical_decoding_confirm"))(a0, a1)
     }
 
     /// Slot `output_plugin_startup`.
@@ -1954,45 +1964,6 @@ impl<'a> Raw<'a> {
         (self.api.trigger_get.expect("trigger_get"))(a0, a1)
     }
 
-    /// Slot `reorderbuffer_get_lsn`.
-    ///
-    /// # Safety
-    ///
-    /// The runtime must provide this slot with exactly this signature, and
-    /// every pointer argument must be valid for the use the slot makes of it.
-    pub unsafe fn reorderbuffer_get_lsn(&self, a0: *mut KwabiReorderBuffer) -> i64 {
-        (self
-            .api
-            .reorderbuffer_get_lsn
-            .expect("reorderbuffer_get_lsn"))(a0)
-    }
-
-    /// Slot `reorderbuffer_get_xid`.
-    ///
-    /// # Safety
-    ///
-    /// The runtime must provide this slot with exactly this signature, and
-    /// every pointer argument must be valid for the use the slot makes of it.
-    pub unsafe fn reorderbuffer_get_xid(&self, a0: *mut KwabiReorderBuffer, a1: u32) -> i64 {
-        (self
-            .api
-            .reorderbuffer_get_xid
-            .expect("reorderbuffer_get_xid"))(a0, a1)
-    }
-
-    /// Slot `reorderbuffer_get_changes`.
-    ///
-    /// # Safety
-    ///
-    /// The runtime must provide this slot with exactly this signature, and
-    /// every pointer argument must be valid for the use the slot makes of it.
-    pub unsafe fn reorderbuffer_get_changes(&self, a0: *mut KwabiReorderBuffer, a1: u32) -> i32 {
-        (self
-            .api
-            .reorderbuffer_get_changes
-            .expect("reorderbuffer_get_changes"))(a0, a1)
-    }
-
     /// Slot `slot_get_lsn`.
     ///
     /// # Safety
@@ -2354,6 +2325,7 @@ pub const SLOTS: &[&str] = &[
     "logical_decoding_begin",
     "logical_decoding_end",
     "logical_decoding_read",
+    "logical_decoding_confirm",
     "output_plugin_startup",
     "output_plugin_shutdown",
     "bgworker_register",
@@ -2490,9 +2462,6 @@ pub const SLOTS: &[&str] = &[
     "trigger_desc",
     "trigger_count",
     "trigger_get",
-    "reorderbuffer_get_lsn",
-    "reorderbuffer_get_xid",
-    "reorderbuffer_get_changes",
     "slot_get_lsn",
     "slot_get_catalog_xmin",
     "slot_is_active",

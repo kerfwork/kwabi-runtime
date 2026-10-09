@@ -219,9 +219,11 @@ fn table_layout_is_stable() {
     // 201 -> 206 when five ExplainState slots were added (pre-release).
     // 206 -> 208 when spi_prepare and spi_free_plan were added, after the SPI
     // execute slots (pre-release). A slot in the middle moves every offset after it.
+    // 208 -> 206 when the reorder buffer slots were removed and
+    // logical_decoding_confirm added (pre-release).
     assert_eq!(
         KwabiV1::FIELD_COUNT,
-        208,
+        206,
         "field count changed — kwabi.h edited?"
     );
 }

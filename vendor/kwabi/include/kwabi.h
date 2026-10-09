@@ -126,7 +126,6 @@ typedef void *KwabiEState;
 typedef void *KwabiMemoryContext;
 typedef void *KwabiPlannerInfo;
 typedef void *KwabiLogicalDecodingCtx;
-typedef void *KwabiReorderBuffer;
 typedef void *KwabiFmgrInfo;
 typedef void *KwabiSPIResult;
 typedef void *KwabiSPIPlan;
@@ -664,10 +663,31 @@ typedef struct KwabiV1 {
     int64 (*sequence_currval)(Oid seq_oid);
     int64 (*sequence_setval)(Oid seq_oid, int64 value);
 
-    /* ---- Replication ---- */
-    KwabiLogicalDecodingCtx (*logical_decoding_begin)(const char *slot_name, int64 start_lsn);
+    /* ---- Logical decoding ----
+     * A decoding handle reads a logical slot's changes at-least-once.
+     *
+     *   logical_decoding_begin   opens a handle on a slot. Nothing is consumed.
+     *   logical_decoding_read    returns the next change, in commit order. The
+     *                            changes are the slot's own output plugin's
+     *                            format (test_decoding, pgoutput, ...). Each
+     *                            change carries its LSN and its transaction's
+     *                            xid, so a consumer can group a transaction.
+     *                            data is valid until the next read or end.
+     *   logical_decoding_confirm advances the slot past lsn. Call it with the
+     *                            LSN of the last change the consumer has durably
+     *                            processed. lsn must not be past the last change
+     *                            read, so a change cannot be skipped unread.
+     *   logical_decoding_end     releases the handle. It does not advance.
+     *
+     * A read batch is every change from the slot's confirmed position up to the
+     * present, cached on the handle. A consumer bounds memory by confirming and
+     * starting a new handle per batch. A slot that is never confirmed replays from
+     * the same position on every begin, which is the at-least-once guarantee.
+     */
+    KwabiLogicalDecodingCtx (*logical_decoding_begin)(const char *slot_name);
+    bool (*logical_decoding_read)(KwabiLogicalDecodingCtx ctx, int64 *lsn, int32 *xid, const char **data);
+    void (*logical_decoding_confirm)(KwabiLogicalDecodingCtx ctx, int64 lsn);
     void (*logical_decoding_end)(KwabiLogicalDecodingCtx ctx);
-    bool (*logical_decoding_read)(KwabiLogicalDecodingCtx ctx, int64 *lsn, StringInfo data);
     void (*output_plugin_startup)(KwabiOutputPluginCallbacks callbacks);
     void (*output_plugin_shutdown)(KwabiOutputPluginCallbacks callbacks);
 
@@ -891,10 +911,6 @@ typedef struct KwabiV1 {
     int (*trigger_count)(KwabiTriggerDesc desc);
     KwabiTrigger (*trigger_get)(KwabiTriggerDesc desc, int index);
 
-    /* ---- Replication internals ---- */
-    int64 (*reorderbuffer_get_lsn)(KwabiReorderBuffer rb);
-    int64 (*reorderbuffer_get_xid)(KwabiReorderBuffer rb, TransactionId xid);
-    int (*reorderbuffer_get_changes)(KwabiReorderBuffer rb, TransactionId xid);
     /* Replication slots are found by name; PostgreSQL gives slots no OID. Each
      * raises if no slot has that name. */
     int64 (*slot_get_lsn)(const char *slot_name);
