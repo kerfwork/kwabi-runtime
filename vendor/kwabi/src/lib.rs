@@ -132,10 +132,23 @@ pub struct KwabiV1 {
     pub sequence_nextval: Option<extern "C" fn(u32) -> i64>,
     pub sequence_currval: Option<extern "C" fn(u32) -> i64>,
     pub sequence_setval: Option<extern "C" fn(u32, i64) -> i64>,
-    pub logical_decoding_begin:
-        Option<extern "C" fn(*const c_char, i32) -> *mut KwabiLogicalDecodingCtx>,
+    pub logical_decoding_begin: Option<
+        extern "C" fn(
+            *const c_char,
+            i32,
+            *const *const c_char,
+            *const *const c_char,
+            i32,
+        ) -> *mut KwabiLogicalDecodingCtx,
+    >,
     pub logical_decoding_read: Option<
-        extern "C" fn(*mut KwabiLogicalDecodingCtx, *mut i64, *mut i32, *mut *const c_char) -> bool,
+        extern "C" fn(
+            *mut KwabiLogicalDecodingCtx,
+            *mut i64,
+            *mut i32,
+            *mut *const c_char,
+            *mut i32,
+        ) -> bool,
     >,
     pub logical_decoding_confirm: Option<extern "C" fn(*mut KwabiLogicalDecodingCtx, i64)>,
     pub logical_decoding_end: Option<extern "C" fn(*mut KwabiLogicalDecodingCtx)>,
@@ -521,17 +534,40 @@ impl std::error::Error for KwabiError {}
 
 impl Kwabi {
     /// Open a logical decoding handle on a slot. Nothing is consumed.
-    /// `max_changes` caps the batch; 0 means no cap.
+    /// `max_changes` caps the batch; 0 means no cap. `options` are the slot's
+    /// output plugin options, for example `("proto_version", "1")` for pgoutput.
     ///
-    /// Raises a PostgreSQL error if the slot does not exist or cannot be decoded.
-    /// Call it where an error may be caught, such as a guarded body.
-    pub fn logical_decoding_begin(&self, slot: &str, max_changes: i32) -> LogicalDecodingCtx<'_> {
+    /// Raises a PostgreSQL error if the slot does not exist, cannot be decoded,
+    /// or the plugin needs an option that is missing. Call it where an error may
+    /// be caught, such as a guarded body.
+    pub fn logical_decoding_begin(
+        &self,
+        slot: &str,
+        max_changes: i32,
+        options: &[(&str, &str)],
+    ) -> LogicalDecodingCtx<'_> {
         let name = std::ffi::CString::new(slot).expect("slot name has no NUL");
+        let names: Vec<std::ffi::CString> = options
+            .iter()
+            .map(|(k, _)| std::ffi::CString::new(*k).expect("option name has no NUL"))
+            .collect();
+        let values: Vec<std::ffi::CString> = options
+            .iter()
+            .map(|(_, v)| std::ffi::CString::new(*v).expect("option value has no NUL"))
+            .collect();
+        let name_ptrs: Vec<*const c_char> = names.iter().map(|c| c.as_ptr()).collect();
+        let value_ptrs: Vec<*const c_char> = values.iter().map(|c| c.as_ptr()).collect();
         let begin = self
             .api
             .logical_decoding_begin
             .expect("logical_decoding_begin");
-        let handle = begin(name.as_ptr(), max_changes);
+        let handle = begin(
+            name.as_ptr(),
+            max_changes,
+            name_ptrs.as_ptr(),
+            value_ptrs.as_ptr(),
+            options.len() as i32,
+        );
         LogicalDecodingCtx {
             handle,
             kwabi: self,
@@ -1229,11 +1265,12 @@ impl<'a> Drop for MemoryContext<'a> {
 // ========================================================================
 
 /// One change from a logical slot: the LSN it was decoded at, the xid of the
-/// transaction it belongs to, and the slot's output plugin text for it.
+/// transaction it belongs to, and the output plugin's bytes for it. Text plugins
+/// (test_decoding) produce UTF-8; pgoutput produces binary protocol messages.
 pub struct LogicalChange<'a> {
     pub lsn: i64,
     pub xid: u32,
-    pub text: &'a std::ffi::CStr,
+    pub data: &'a [u8],
 }
 
 impl<'a> LogicalDecodingCtx<'a> {
@@ -1245,18 +1282,19 @@ impl<'a> LogicalDecodingCtx<'a> {
         let mut lsn: i64 = 0;
         let mut xid: i32 = 0;
         let mut data: *const c_char = ptr::null();
+        let mut len: i32 = 0;
         let read = self
             .kwabi
             .api
             .logical_decoding_read
             .expect("logical_decoding_read");
-        if read(self.handle, &mut lsn, &mut xid, &mut data) {
-            // The runtime keeps the text alive until the next read or the drop.
-            let text = unsafe { std::ffi::CStr::from_ptr(data) };
+        if read(self.handle, &mut lsn, &mut xid, &mut data, &mut len) {
+            // The runtime keeps the bytes alive until the next read or the drop.
+            let data = unsafe { std::slice::from_raw_parts(data as *const u8, len as usize) };
             Some(LogicalChange {
                 lsn,
                 xid: xid as u32,
-                text,
+                data,
             })
         } else {
             None

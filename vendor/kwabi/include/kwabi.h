@@ -671,12 +671,16 @@ typedef struct KwabiV1 {
      *                            stops only at a transaction boundary once the count
      *                            is reached, so a batch always ends at a COMMIT. A
      *                            transaction larger than the cap is returned whole.
-     *   logical_decoding_read    returns the next change, in commit order. The
-     *                            changes are the slot's own output plugin's
-     *                            format (test_decoding, pgoutput, ...). Each
-     *                            change carries its LSN and its transaction's
-     *                            xid, so a consumer can group a transaction.
-     *                            data is valid until the next read or end.
+     *                            option_names/option_values are the slot's output
+     *                            plugin options (noptions pairs), for example
+     *                            proto_version and publication_names for pgoutput.
+     *                            A plugin that requires an option raises without it.
+     *   logical_decoding_read    returns the next change, in commit order, as the
+     *                            slot's output plugin wrote it: bytes, not necessarily
+     *                            text (pgoutput writes binary messages). Each change
+     *                            carries its LSN and its transaction's xid, so a
+     *                            consumer can group a transaction. data points at len
+     *                            bytes, valid until the next read or end.
      *   logical_decoding_confirm advances the slot past lsn. Call it with the
      *                            LSN of the last change the consumer has durably
      *                            processed. lsn must not be past the last change
@@ -688,8 +692,8 @@ typedef struct KwabiV1 {
      * starting a new handle per batch. A slot that is never confirmed replays from
      * the same position on every begin, which is the at-least-once guarantee.
      */
-    KwabiLogicalDecodingCtx (*logical_decoding_begin)(const char *slot_name, int32 max_changes);
-    bool (*logical_decoding_read)(KwabiLogicalDecodingCtx ctx, int64 *lsn, int32 *xid, const char **data);
+    KwabiLogicalDecodingCtx (*logical_decoding_begin)(const char *slot_name, int32 max_changes, const char *const *option_names, const char *const *option_values, int32 noptions);
+    bool (*logical_decoding_read)(KwabiLogicalDecodingCtx ctx, int64 *lsn, int32 *xid, const char **data, int32 *len);
     void (*logical_decoding_confirm)(KwabiLogicalDecodingCtx ctx, int64 lsn);
     void (*logical_decoding_end)(KwabiLogicalDecodingCtx ctx);
     void (*output_plugin_startup)(KwabiOutputPluginCallbacks callbacks);

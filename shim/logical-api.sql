@@ -15,10 +15,16 @@
 LOAD :'bundle';
 
 DROP FUNCTION IF EXISTS kwabi_logical_batch_test();
+DROP FUNCTION IF EXISTS kwabi_pgoutput_test();
+DROP FUNCTION IF EXISTS kwabi_pgoutput_no_options_test();
 DROP FUNCTION IF EXISTS kwabi_logical_read_test();
 DROP FUNCTION IF EXISTS kwabi_logical_after_confirm_test();
 DROP FUNCTION IF EXISTS kwabi_logical_missing_slot_test();
 
+CREATE FUNCTION kwabi_pgoutput_test()
+    RETURNS bool AS :'bundle','kwabi_pgoutput_test' LANGUAGE C;
+CREATE FUNCTION kwabi_pgoutput_no_options_test()
+    RETURNS bool AS :'bundle','kwabi_pgoutput_no_options_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_batch_test()
     RETURNS bool AS :'bundle','kwabi_logical_batch_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_read_test()
@@ -30,9 +36,14 @@ CREATE FUNCTION kwabi_logical_missing_slot_test()
 
 SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
     WHERE slot_name = 'kwabi_logical_t';
+SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
+    WHERE slot_name = 'kwabi_pgo_t';
+DROP PUBLICATION IF EXISTS kwabi_pub;
 DROP TABLE IF EXISTS kwabi_lg_t;
 CREATE TABLE kwabi_lg_t (v int4);
+CREATE PUBLICATION kwabi_pub FOR TABLE kwabi_lg_t;
 SELECT pg_create_logical_replication_slot('kwabi_logical_t', 'test_decoding');
+SELECT pg_create_logical_replication_slot('kwabi_pgo_t', 'pgoutput');
 INSERT INTO kwabi_lg_t VALUES (1);
 INSERT INTO kwabi_lg_t VALUES (2);
 
@@ -52,7 +63,19 @@ SELECT kwabi_logical_after_confirm_test() AS logical_after_confirm;
 \echo '=== 3. begin on a missing slot raises ==='
 SELECT kwabi_logical_missing_slot_test() AS logical_missing_slot;
 
+
+\echo ''
+\echo '=== 4. pgoutput through the same begin: binary messages with the publication options ==='
+SELECT kwabi_pgoutput_test() AS pgoutput_messages;
+
+\echo ''
+\echo '=== 5. pgoutput without its options raises ==='
+SELECT kwabi_pgoutput_no_options_test() AS pgoutput_no_options;
+
+-- Teardown runs after every test, including the pgoutput ones.
 SELECT pg_drop_replication_slot('kwabi_logical_t');
+SELECT pg_drop_replication_slot('kwabi_pgo_t');
+DROP PUBLICATION IF EXISTS kwabi_pub;
 DROP TABLE IF EXISTS kwabi_lg_t;
 
 \echo ''

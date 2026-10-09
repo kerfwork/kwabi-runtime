@@ -1281,12 +1281,15 @@ for M in "${MAJORS[@]}"; do
         LOG_READ=$(grep -A2 'logical_read' "$OUT" | grep -cE '^ t')
         LOG_AFTER=$(grep -A2 'logical_after_confirm' "$OUT" | grep -cE '^ t')
         LOG_MISSING=$(grep -A2 'logical_missing_slot' "$OUT" | grep -cE '^ t')
+        LOG_PGO=$(grep -A2 'pgoutput_messages' "$OUT" | grep -cE '^ t')
+        LOG_PGO_NOOPT=$(grep -A2 'pgoutput_no_options' "$OUT" | grep -cE '^ t')
 
         if [ "$LOG_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && \
-           [ "$LOG_READ" -ge 1 ] && [ "$LOG_AFTER" -ge 1 ] && [ "$LOG_MISSING" -ge 1 ]; then
+           [ "$LOG_READ" -ge 1 ] && [ "$LOG_AFTER" -ge 1 ] && [ "$LOG_MISSING" -ge 1 ] && \
+           [ "$LOG_PGO" -ge 1 ] && [ "$LOG_PGO_NOOPT" -ge 1 ]; then
             record PASS "$M" "logical-api green ($LOG_TRUE assertions)"
         else
-            record FAIL "$M" "logical-api: true=$LOG_TRUE false=$LOG_FALSE errors=$(unexpected_errors "$OUT") read=$LOG_READ after=$LOG_AFTER missing=$LOG_MISSING"
+            record FAIL "$M" "logical-api: true=$LOG_TRUE false=$LOG_FALSE errors=$(unexpected_errors "$OUT") read=$LOG_READ after=$LOG_AFTER missing=$LOG_MISSING pgoutput=$LOG_PGO noopt=$LOG_PGO_NOOPT"
             echo "      see $OUT"
         fi
 
