@@ -67,7 +67,12 @@ shim_guc_get_bool(const char *name)
     {
         str = GetConfigOptionByName(name, NULL, false);
         if (str != NULL)
-            value = (str[0] == 't' || str[0] == 'T' || str[0] == '1' || str[0] == 'o');
+        {
+            bool parsed;
+            /* PostgreSQL's own spellings (on/off, true/false, yes/no, 1/0, t/f, y/n). */
+            if (parse_bool(str, &parsed))
+                value = parsed;
+        }
     }
     PG_CATCH();
     {

@@ -28,6 +28,7 @@ DROP FUNCTION IF EXISTS kwabi_guc_test_int(int4);
 DROP FUNCTION IF EXISTS kwabi_guc_test_string();
 DROP FUNCTION IF EXISTS kwabi_guc_test_bool(bool);
 DROP FUNCTION IF EXISTS kwabi_guc_test_float();
+DROP FUNCTION IF EXISTS kwabi_guc_get_bool_named(text);
 DROP FUNCTION IF EXISTS kwabi_guc_set_test();
 DROP FUNCTION IF EXISTS kwabi_guc_control();
 
@@ -39,6 +40,8 @@ CREATE FUNCTION kwabi_guc_test_bool(bool)
     RETURNS bool AS :'bundle','kwabi_guc_test_bool' LANGUAGE C;
 CREATE FUNCTION kwabi_guc_test_float()
     RETURNS bool AS :'bundle','kwabi_guc_test_float' LANGUAGE C;
+CREATE FUNCTION kwabi_guc_get_bool_named(text)
+    RETURNS bool AS :'bundle','kwabi_guc_get_bool_named' LANGUAGE C;
 CREATE FUNCTION kwabi_guc_set_test()
     RETURNS bool AS :'bundle','kwabi_guc_set_test' LANGUAGE C;
 CREATE FUNCTION kwabi_guc_control()
@@ -69,6 +72,15 @@ SELECT kwabi_guc_test_bool(true) AS bool_guc_read;
 SELECT kwabi_guc_test_float() AS float_guc_read;
 
 \echo ''
+\echo ''
+\echo '=== 4b. a boolean GUC reads as its set value (regression: "off" must be false) ==='
+\echo '   enable_seqscan is settable per session; the ABI must see off as false, on as true'
+SET enable_seqscan = off;
+SELECT kwabi_guc_get_bool_named('enable_seqscan') = false AS bool_guc_off;
+SET enable_seqscan = on;
+SELECT kwabi_guc_get_bool_named('enable_seqscan') = true AS bool_guc_on;
+RESET enable_seqscan;
+
 \echo '=== 5. set and read back GUC values ==='
 \echo '   set string, int, bool, float through the ABI, then read them back'
 SELECT kwabi_guc_set_test() AS set_and_read_back;

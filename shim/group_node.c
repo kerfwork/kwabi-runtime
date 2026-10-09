@@ -3,6 +3,7 @@
 #include "shim_internal.h"
 #include "optimizer/optimizer.h" /* planner() */
 #include "optimizer/cost.h"
+#include "commands/sequence.h" /* nextval_internal */
 
 
 
@@ -444,6 +445,70 @@ shim_vacuum_analyze_rel(Relation rel, VacuumParams params, BufferAccessStrategy 
     (void) relid; (void) rv; (void) &params; (void) bstrategy;
 }
 
+static int64
+shim_sequence_nextval(Oid seq_oid)
+{
+    return nextval_internal(seq_oid, true);
+}
+
+static int64
+shim_sequence_currval(Oid seq_oid)
+{
+    /* currval_internal is not exported from the postgres binary.
+     * Use SPI to call SELECT currval('seqname') instead. */
+    int64 result = 0;
+    char sql[512];
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    /* currval takes a regclass argument; cast the oid directly */
+    snprintf(sql, sizeof(sql), "SELECT currval(%u::regclass)", seq_oid);
+
+    if (SPI_execute(sql, false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: currval lookup failed")));
+    }
+
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            result = DatumGetInt64(d);
+    }
+
+    SPI_finish();
+    return result;
+}
+
+static int64
+shim_sequence_setval(Oid seq_oid, int64 value)
+{
+    int64 result = 0;
+    char sql[512];
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    snprintf(sql, sizeof(sql), "SELECT setval(%u::regclass, " INT64_FORMAT ")", seq_oid, value);
+
+    if (SPI_execute(sql, false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: setval failed")));
+    }
+
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            result = DatumGetInt64(d);
+    }
+
+    SPI_finish();
+    return result;
+}
+
+
 void
 init_group_node(void)
 {
@@ -473,6 +538,9 @@ init_group_node(void)
     shim_table.planner_estimate_cost = shim_planner_estimate_cost;
     shim_table.planner_info = (KwabiPlannerInfo (*)(KwabiNode, int, KwabiParamListInfo)) shim_planner_info;
     shim_table.free_planner_info = shim_free_planner_info;
+    shim_table.sequence_nextval = shim_sequence_nextval;
+    shim_table.sequence_currval = shim_sequence_currval;
+    shim_table.sequence_setval = shim_sequence_setval;
     shim_table.walsender_is_connected = shim_walsender_is_connected;
     shim_table.walsender_send = shim_walsender_send;
     shim_table.walsender_receive = shim_walsender_receive;
@@ -1019,3 +1087,197 @@ kwabi_vacuum_analyze_rel_test(PG_FUNCTION_ARGS)
 
     PG_RETURN_BOOL(true);
 }
+
+/*
+ * kwabi_sequence_nextval_test() -> int8
+ *
+ * Test sequence_nextval through the ABI.
+ * Creates a sequence, calls nextval, and verifies the result is 1.
+ */
+PG_FUNCTION_INFO_V1(kwabi_sequence_nextval_test);
+
+Datum
+kwabi_sequence_nextval_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->sequence_nextval == NULL)
+        ereport(ERROR, (errmsg("kwabi: sequence_nextval slot is not wired")));
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE SEQUENCE kwabi_seq_test", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE SEQUENCE failed")));
+    }
+    SPI_finish();
+
+    Oid seqoid = InvalidOid;
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("SELECT oid FROM pg_class WHERE relname = 'kwabi_seq_test'", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            seqoid = DatumGetObjectId(d);
+    }
+    SPI_finish();
+
+    if (!OidIsValid(seqoid))
+        ereport(ERROR, (errmsg("kwabi: could not find test sequence")));
+
+    int64 result = api->sequence_nextval(seqoid);
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("DROP SEQUENCE kwabi_seq_test", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP SEQUENCE failed")));
+    }
+    SPI_finish();
+
+    PG_RETURN_INT64(result);
+}
+
+/*
+ * kwabi_sequence_currval_test() -> int8
+ *
+ * Test sequence_currval through the ABI.
+ * Creates a sequence, calls nextval, then currval, and verifies they match.
+ */
+PG_FUNCTION_INFO_V1(kwabi_sequence_currval_test);
+
+Datum
+kwabi_sequence_currval_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->sequence_currval == NULL)
+        ereport(ERROR, (errmsg("kwabi: sequence_currval slot is not wired")));
+
+    if (api->sequence_nextval == NULL)
+        ereport(ERROR, (errmsg("kwabi: sequence_nextval slot is not wired")));
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE SEQUENCE kwabi_seq_currval_test", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE SEQUENCE failed")));
+    }
+    SPI_finish();
+
+    Oid seqoid = InvalidOid;
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("SELECT oid FROM pg_class WHERE relname = 'kwabi_seq_currval_test'", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            seqoid = DatumGetObjectId(d);
+    }
+    SPI_finish();
+
+    if (!OidIsValid(seqoid))
+        ereport(ERROR, (errmsg("kwabi: could not find test sequence")));
+
+    int64 nextval_result = api->sequence_nextval(seqoid);
+    int64 currval_result = api->sequence_currval(seqoid);
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("DROP SEQUENCE kwabi_seq_currval_test", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP SEQUENCE failed")));
+    }
+    SPI_finish();
+
+    if (nextval_result != currval_result)
+        ereport(ERROR, (errmsg("kwabi: sequence_currval (%ld) != sequence_nextval (%ld)", currval_result, nextval_result)));
+
+    PG_RETURN_INT64(currval_result);
+}
+
+/*
+ * kwabi_sequence_setval_test() -> int8
+ *
+ * Test sequence_setval through the ABI.
+ * Creates a sequence, calls setval to set it to 42, and verifies the result.
+ */
+PG_FUNCTION_INFO_V1(kwabi_sequence_setval_test);
+
+Datum
+kwabi_sequence_setval_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    const KwabiV1 *api = shim_api;
+
+    if (api->sequence_setval == NULL)
+        ereport(ERROR, (errmsg("kwabi: sequence_setval slot is not wired")));
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("CREATE SEQUENCE kwabi_seq_setval_test", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: CREATE SEQUENCE failed")));
+    }
+    SPI_finish();
+
+    Oid seqoid = InvalidOid;
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("SELECT oid FROM pg_class WHERE relname = 'kwabi_seq_setval_test'", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: SELECT failed")));
+    }
+
+    if (SPI_processed > 0) {
+        bool isnull;
+        Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+        if (!isnull)
+            seqoid = DatumGetObjectId(d);
+    }
+    SPI_finish();
+
+    if (!OidIsValid(seqoid))
+        ereport(ERROR, (errmsg("kwabi: could not find test sequence")));
+
+    int64 result = api->sequence_setval(seqoid, 42);
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
+
+    if (SPI_execute("DROP SEQUENCE kwabi_seq_setval_test", false, 0) < 0) {
+        SPI_finish();
+        ereport(ERROR, (errmsg("kwabi: DROP SEQUENCE failed")));
+    }
+    SPI_finish();
+
+    PG_RETURN_INT64(result);
+}
+

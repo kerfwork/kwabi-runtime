@@ -1220,6 +1220,24 @@ kwabi_guc_test_int(PG_FUNCTION_ARGS)
 }
 
 /*
+ * kwabi_guc_get_bool_named(text) -> bool
+ *
+ * Return the boolean GUC value read through the ABI, so SQL can compare it
+ * against a value it set itself.
+ */
+PG_FUNCTION_INFO_V1(kwabi_guc_get_bool_named);
+
+Datum
+kwabi_guc_get_bool_named(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->guc_get_bool == NULL)
+        ereport(ERROR, (errmsg("kwabi: guc_get_bool is not wired")));
+
+    char *name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_BOOL(shim_api->guc_get_bool(name));
+}
+
+/*
  * kwabi_guc_test_string() -> bool
  *
  * Get a string GUC value through the ABI.
