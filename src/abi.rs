@@ -319,7 +319,7 @@ pub struct KwabiV1 {
     pub vacuum_rel: Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> ()>,
     pub vacuum_analyze_rel:
         Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> ()>,
-    pub trigger_desc: Option<unsafe extern "C" fn(u32) -> *mut *mut c_void>,
+    pub trigger_desc: Option<unsafe extern "C" fn(u32) -> *mut c_void>,
     pub trigger_count: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     pub trigger_get: Option<unsafe extern "C" fn(*mut c_void, c_int) -> *mut c_void>,
     pub reorderbuffer_get_lsn: Option<unsafe extern "C" fn(*mut c_void) -> i64>,

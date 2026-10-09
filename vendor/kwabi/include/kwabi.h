@@ -140,6 +140,8 @@ typedef void *KwabiExplainState;
 typedef void *KwabiParamListInfo;
 typedef void *KwabiQueryEnvironment;
 typedef void *KwabiSnapshot;
+typedef void *KwabiTriggerDesc;
+typedef void *KwabiTrigger;
 
 /* ========================================================================
  * Basic type aliases (matching PostgreSQL's types)
@@ -179,8 +181,6 @@ typedef void*    TableScanDesc;
 typedef void*    Buffer;
 typedef void*    Page;
 typedef void*    ItemPointer;
-typedef void*    TriggerDesc;
-typedef void*    Trigger;
 typedef void*    BulkInsertState;
 typedef void*    StringInfo;
 typedef void*    List;
@@ -857,9 +857,9 @@ typedef struct KwabiV1 {
     void (*vacuum_analyze_rel)(Relation rel, VacuumParams params, BufferAccessStrategy bstrategy);
 
     /* ---- Triggers ---- */
-    TriggerDesc *(*trigger_desc)(Oid relid);
-    int (*trigger_count)(TriggerDesc desc);
-    Trigger (*trigger_get)(TriggerDesc desc, int index);
+    KwabiTriggerDesc (*trigger_desc)(Oid relid);
+    int (*trigger_count)(KwabiTriggerDesc desc);
+    KwabiTrigger (*trigger_get)(KwabiTriggerDesc desc, int index);
 
     /* ---- Replication internals ---- */
     int64 (*reorderbuffer_get_lsn)(KwabiReorderBuffer rb);

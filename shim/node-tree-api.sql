@@ -39,6 +39,7 @@ DROP FUNCTION IF EXISTS kwabi_planned_stmt_is_utility(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_has_modifying_cte(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_has_returning(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_plan_tree(text);
+DROP FUNCTION IF EXISTS kwabi_planned_stmt_result_relations_length(text);
 DROP FUNCTION IF EXISTS kwabi_query_limit_count(text);
 DROP FUNCTION IF EXISTS kwabi_query_limit_offset(text);
 DROP FUNCTION IF EXISTS kwabi_planned_stmt_rtable_length(sql text);
@@ -75,7 +76,7 @@ CREATE FUNCTION kwabi_node_type_name(sql text)
     RETURNS text AS :'bundle','kwabi_node_type_name' LANGUAGE C;
 CREATE FUNCTION kwabi_node_list_length(sql text)
     RETURNS int4 AS :'bundle','kwabi_node_list_length' LANGUAGE C;
-CREATE FUNCTION kwabi_node_list_get(sql text, int4 idx)
+CREATE FUNCTION kwabi_node_list_get(sql text, idx int4)
     RETURNS int4 AS :'bundle','kwabi_node_list_get' LANGUAGE C;
 CREATE FUNCTION kwabi_query_command_type(sql text)
     RETURNS int4 AS :'bundle','kwabi_query_command_type' LANGUAGE C;
@@ -130,9 +131,9 @@ CREATE FUNCTION kwabi_walsender_is_connected_test()
 CREATE FUNCTION kwabi_node_control()
     RETURNS bool AS :'bundle','kwabi_node_control' LANGUAGE C;
 CREATE FUNCTION kwabi_reorderbuffer_get_changes_test()
-    RETURNS int4 AS :'bundle','kwabi_reorderbuffer_get_changes_test' LANGUAGE C;
+    RETURNS bool AS :'bundle','kwabi_reorderbuffer_get_changes_test' LANGUAGE C;
 CREATE FUNCTION kwabi_reorderbuffer_get_lsn_test()
-    RETURNS int4 AS :'bundle','kwabi_reorderbuffer_get_lsn_test' LANGUAGE C;
+    RETURNS bool AS :'bundle','kwabi_reorderbuffer_get_lsn_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_decoding_begin_test()
     RETURNS bool AS :'bundle','kwabi_logical_decoding_begin_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_decoding_end_test()
@@ -252,8 +253,8 @@ SELECT kwabi_query_limit_count('SELECT 1') = 0 AS limit_count_null;
 \echo '=== 12c. query limit offset ==='
 \echo '   SELECT 1 has no OFFSET, so limit offset is NULL (0)'
 SELECT kwabi_query_limit_offset('SELECT 1') = 0 AS limit_offset_null;
-\echo '   SELECT 1 LIMIT 5 OFFSET 3 must have an OFFSET node (KWABI_NODE_CONST = 10)'
-SELECT kwabi_query_limit_offset('SELECT 1 LIMIT 5 OFFSET 3') = 10 AS limit_offset_const;
+\echo '   SELECT 1 LIMIT 5 OFFSET 3: the OFFSET is an int4->int8 coercion, so the node is FUNC_EXPR (13), not a bare Const'
+SELECT kwabi_query_limit_offset('SELECT 1 LIMIT 5 OFFSET 3') = 13 AS limit_offset_const;
 
 \echo ''
 \echo '=== 13. planned stmt result relations length ==='
@@ -328,24 +329,24 @@ SELECT kwabi_node_type('SELECT 42') = 1 AS after_control;
 
 \echo ''
 \echo '=== 18. reorderbuffer_get_changes ==='
-\echo '   reorderbuffer_get_changes(NULL, InvalidTransactionId) must return 0'
-SELECT kwabi_reorderbuffer_get_changes_test() = 0 AS reorderbuffer_get_changes;
+\echo '   reorderbuffer_get_changes must raise "not supported by this shim"'
+SELECT kwabi_reorderbuffer_get_changes_test() AS reorderbuffer_get_changes;
 
 \echo ''
 \echo '=== 15b. reorderbuffer_get_lsn ==='
-\echo '   reorderbuffer_get_lsn(NULL) must return 0'
-SELECT kwabi_reorderbuffer_get_lsn_test() = 0 AS reorderbuffer_get_lsn;
+\echo '   reorderbuffer_get_lsn must raise "not supported by this shim"'
+SELECT kwabi_reorderbuffer_get_lsn_test() AS reorderbuffer_get_lsn;
 
 \echo ''
 
 \echo ''
 \echo '=== 19. logical_decoding_begin ==='
-\echo '   logical_decoding_begin(InvalidOid, 0) must return NULL'
+\echo '   logical_decoding_begin must raise "not supported by this shim", never return a context'
 SELECT kwabi_logical_decoding_begin_test() AS logical_decoding_begin;
 
 \echo ''
 \echo '=== 20. logical_decoding_end ==='
-\echo '   logical_decoding_end(NULL) must not crash'
+\echo '   logical_decoding_end(NULL) must return normally'
 SELECT kwabi_logical_decoding_end_test() AS logical_decoding_end;
 
 \echo ''

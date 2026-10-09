@@ -4399,3 +4399,127 @@ kwabi_extension_control(PG_FUNCTION_ARGS)
             (errmsg("kwabi: extension negative control fired as intended"),
              errdetail("extension oid is not 999 -- the value comparison is honest")));
 }
+
+/*
+ * Query and planned-statement wrappers. Each parses SQL with parse_stmt and
+ * calls one slot. Node-valued results are returned as the kwabi node type,
+ * with 0 (KWABI_NODE_UNKNOWN) for NULL, so SQL can compare them to the enum.
+ */
+static KwabiNode
+kwabi_test_parse(text *arg)
+{
+    char *sql = text_to_cstring(arg);
+    KwabiNode node = shim_api->parse_stmt(sql);
+
+    pfree(sql);
+    if (node == NULL)
+        ereport(ERROR, (errmsg("kwabi: parse_stmt returned NULL")));
+    return node;
+}
+
+static int32
+kwabi_test_node_type_or_zero(KwabiNode node)
+{
+    return node == NULL ? 0 : (int32) shim_api->node_type(node);
+}
+
+#define KWABI_NODE_TEST_REQUIRE(...) \
+    do { \
+        if (shim_api == NULL || shim_api->parse_stmt == NULL || \
+            __VA_ARGS__) \
+            ereport(ERROR, (errmsg("kwabi: node tree slots are not wired"))); \
+    } while (0)
+
+PG_FUNCTION_INFO_V1(kwabi_query_sort_clause_length);
+Datum
+kwabi_query_sort_clause_length(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->query_sort_clause == NULL || shim_api->node_list_length == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    KwabiList list = shim_api->query_sort_clause(node);
+    PG_RETURN_INT32(shim_api->node_list_length((KwabiNode) list));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_query_group_clause_length);
+Datum
+kwabi_query_group_clause_length(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->query_group_clause == NULL || shim_api->node_list_length == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    KwabiList list = shim_api->query_group_clause(node);
+    PG_RETURN_INT32(shim_api->node_list_length((KwabiNode) list));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_query_jointree);
+Datum
+kwabi_query_jointree(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->query_jointree == NULL || shim_api->node_type == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_INT32(kwabi_test_node_type_or_zero(shim_api->query_jointree(node)));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_query_limit_count);
+Datum
+kwabi_query_limit_count(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->query_limit_count == NULL || shim_api->node_type == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_INT32(kwabi_test_node_type_or_zero(shim_api->query_limit_count(node)));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_query_limit_offset);
+Datum
+kwabi_query_limit_offset(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->query_limit_offset == NULL || shim_api->node_type == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_INT32(kwabi_test_node_type_or_zero(shim_api->query_limit_offset(node)));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_planned_stmt_plan_tree);
+Datum
+kwabi_planned_stmt_plan_tree(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_plan_tree == NULL || shim_api->node_type == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_INT32(kwabi_test_node_type_or_zero((KwabiNode) shim_api->planned_stmt_plan_tree(node)));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_planned_stmt_result_relations_length);
+Datum
+kwabi_planned_stmt_result_relations_length(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_result_relations == NULL || shim_api->node_list_length == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    KwabiList list = shim_api->planned_stmt_result_relations(node);
+    PG_RETURN_INT32(shim_api->node_list_length((KwabiNode) list));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_planned_stmt_rtable_length);
+Datum
+kwabi_planned_stmt_rtable_length(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_rtable == NULL || shim_api->node_list_length == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    KwabiList list = shim_api->planned_stmt_rtable(node);
+    PG_RETURN_INT32(shim_api->node_list_length((KwabiNode) list));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_planned_stmt_has_modifying_cte);
+Datum
+kwabi_planned_stmt_has_modifying_cte(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_has_modifying_cte == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_BOOL(shim_api->planned_stmt_has_modifying_cte(node));
+}
+
+PG_FUNCTION_INFO_V1(kwabi_planned_stmt_has_returning);
+Datum
+kwabi_planned_stmt_has_returning(PG_FUNCTION_ARGS)
+{
+    KWABI_NODE_TEST_REQUIRE(shim_api->planned_stmt_has_returning == NULL);
+    KwabiNode node = kwabi_test_parse(PG_GETARG_TEXT_PP(0));
+    PG_RETURN_BOOL(shim_api->planned_stmt_has_returning(node));
+}
