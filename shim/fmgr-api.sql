@@ -167,5 +167,19 @@ BEGIN;
 SELECT kwabi_fmgr_call2(177, 100, 200) = 300 AS in_transaction;
 COMMIT;
 
+DROP FUNCTION IF EXISTS kwabi_ereport_test();
+DROP FUNCTION IF EXISTS kwabi_elog_test();
+CREATE FUNCTION kwabi_ereport_test()
+    RETURNS bool AS :'bundle','kwabi_ereport_test' LANGUAGE C;
+CREATE FUNCTION kwabi_elog_test()
+    RETURNS bool AS :'bundle','kwabi_elog_test' LANGUAGE C;
+
+\echo ''
+\echo '=== 99. ereport and elog through the ABI (variadic slots) ==='
+\echo '   ereport must raise with the formatted message and SQLSTATE'
+SELECT kwabi_ereport_test() AS ereport_formats;
+\echo '   elog at NOTICE must format and return'
+SELECT kwabi_elog_test() AS elog_formats;
+
 \echo ''
 \echo '=== fmgr-api tests complete ==='

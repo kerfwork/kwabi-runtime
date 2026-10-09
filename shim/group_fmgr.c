@@ -1,6 +1,7 @@
 /* group_fmgr.c — fmgr slots for the kwabi shim */
 
 #include "shim_internal.h"
+#include <stdarg.h>
 
 /* Capture the error currently being handled into the runtime's error buffer.
  *
@@ -200,6 +201,37 @@ shim_call_function3(KwabiFmgrInfo info, Datum arg1, Datum arg2, Datum arg3,
     return shim_call_impl((FmgrInfo *) info, 3, a, NULL, isnull, result);
 }
 
+/*
+ * ereport and elog are variadic in the ABI. They format with vsnprintf and then
+ * raise or log through PostgreSQL, so the message is fully formatted before any
+ * longjmp. ereport always raises at ERROR; elog takes its level as given.
+ */
+static void
+shim_ereport(int sqlstate, const char *fmt, ...)
+{
+    char    buf[2048];
+    va_list ap;
+
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    ereport(ERROR, (errcode(sqlstate), errmsg("%s", buf)));
+}
+
+static void
+shim_elog(int elevel, const char *fmt, ...)
+{
+    char    buf[2048];
+    va_list ap;
+
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    elog(elevel, "%s", buf);
+}
+
 void
 init_group_fmgr(void)
 {
@@ -208,4 +240,57 @@ init_group_fmgr(void)
     shim_table.call_function1 = shim_call_function1;
     shim_table.call_function2 = shim_call_function2;
     shim_table.call_function3 = shim_call_function3;
+    shim_table.ereport = shim_ereport;
+    shim_table.elog = shim_elog;
+}
+
+/* ---- proof functions ------------------------------------------------- */
+
+/*
+ * kwabi_ereport_test() -> bool
+ *
+ * ereport through the ABI must raise with the formatted message.
+ */
+PG_FUNCTION_INFO_V1(kwabi_ereport_test);
+
+Datum
+kwabi_ereport_test(PG_FUNCTION_ARGS)
+{
+    bool ok = false;
+
+    if (shim_api == NULL || shim_api->ereport == NULL)
+        ereport(ERROR, (errmsg("kwabi: ereport is not wired")));
+
+    PG_TRY();
+    {
+        (shim_api->ereport)(ERRCODE_INVALID_PARAMETER_VALUE, "kwabi probe %d-%s", 42, "ok");
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        ok = (strcmp(edata->message, "kwabi probe 42-ok") == 0 &&
+              edata->sqlerrcode == ERRCODE_INVALID_PARAMETER_VALUE);
+        FreeErrorData(edata);
+        FlushErrorState();
+    }
+    PG_END_TRY();
+
+    PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_elog_test() -> bool
+ *
+ * elog at NOTICE through the ABI must format and return normally.
+ */
+PG_FUNCTION_INFO_V1(kwabi_elog_test);
+
+Datum
+kwabi_elog_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->elog == NULL)
+        ereport(ERROR, (errmsg("kwabi: elog is not wired")));
+
+    (shim_api->elog)(NOTICE, "kwabi elog probe %d", 7);
+    PG_RETURN_BOOL(true);
 }
