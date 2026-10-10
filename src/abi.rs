@@ -22,6 +22,7 @@ pub const KWABI_CAP_ATOMIC_BODY: u64 = 1 << 4;
 pub const KWABI_CAP_SLRU: u64 = 1 << 5;
 pub const KWABI_CAP_HOOKS: u64 = 1 << 6;
 pub const KWABI_CAP_HOOK_RELOAD: u64 = 1 << 7;
+pub const KWABI_CAP_AGGREGATE: u64 = 1 << 8;
 pub const KWABI_CAP_ALL: u64 = KWABI_CAP_CORE
     | KWABI_CAP_STRUCTURED_ERRORS
     | KWABI_CAP_ERROR_FIREWALL
@@ -29,7 +30,8 @@ pub const KWABI_CAP_ALL: u64 = KWABI_CAP_CORE
     | KWABI_CAP_ATOMIC_BODY
     | KWABI_CAP_SLRU
     | KWABI_CAP_HOOKS
-    | KWABI_CAP_HOOK_RELOAD;
+    | KWABI_CAP_HOOK_RELOAD
+    | KWABI_CAP_AGGREGATE;
 
 /// Stable ABI version published by this runtime.
 pub const KWABI_VERSION: u32 = 1;

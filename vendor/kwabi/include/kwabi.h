@@ -119,11 +119,18 @@ extern "C" {
  * preloaded and its code is mapped once per server. */
 #define KWABI_CAP_HOOK_RELOAD              (1ULL << 7)
 
+/* AGGREGATE: a bound aggregate body runs with its state pinned to the body table that
+ * created it (see the aggregate section below), so a reload never changes a running
+ * aggregate's layout; a declared `combine` is used for partial aggregation; and a
+ * declared `inverse` is used only for moving frames. Not derivable from slot presence:
+ * a runtime could expose the aggregate functions and ignore pinning or combine. */
+#define KWABI_CAP_AGGREGATE                (1ULL << 8)
+
 /* Every defined bit, for a runtime that supports the lot. */
 #define KWABI_CAP_ALL \
     (KWABI_CAP_CORE | KWABI_CAP_STRUCTURED_ERRORS | KWABI_CAP_ERROR_FIREWALL | \
      KWABI_CAP_MEMORY_INTROSPECTION | KWABI_CAP_ATOMIC_BODY | KWABI_CAP_SLRU | \
-     KWABI_CAP_HOOKS | KWABI_CAP_HOOK_RELOAD)
+     KWABI_CAP_HOOKS | KWABI_CAP_HOOK_RELOAD | KWABI_CAP_AGGREGATE)
 #define KWABI_VERSION KWABI_VERSION_1
 
 /* PostgreSQL version numbers (from pg_config.h) */
@@ -1243,6 +1250,68 @@ typedef struct KwabiTypeBodies
     KwabiTypeBinopFn binop;        /* version 2 */
     void       *arg;
 } KwabiTypeBodies;
+
+/* ========================================================================
+ * Aggregate bodies (appended, still v1)
+ *
+ * A library bound with hook_bind_extension(name, path) may export
+ *
+ *     const KwabiAggBodies *kwabi_aggregate_bodies(void);
+ *
+ * which supplies an aggregate. The runtime supplies the SQL functions that PostgreSQL
+ * calls, all on one C symbol each, and they dispatch to this table. The binding is the
+ * part of the function's name before "__"; the role is the part after:
+ *
+ *     <binding>__step     (internal, T) -> internal     transition; a NULL state means init
+ *     <binding>__final    (internal)    -> T            final
+ *     <binding>__inverse  (internal, T) -> internal     moving-aggregate inverse
+ *     <binding>__combine  (internal, internal) -> internal
+ *     <binding>__serialize   (internal) -> bytea
+ *     <binding>__deserialize (bytea, internal) -> internal
+ *
+ * The state is opaque to the runtime and is passed as an `internal` pointer, never copied
+ * through SQL. Init allocates with the runtime's memory functions, which place the state in
+ * PostgreSQL's aggregate context.
+ *
+ * Pinning. The runtime wraps each state with the table that created it. step, inverse,
+ * final and serialize always use that pinned table, so a reload during an aggregate cannot
+ * change its layout. combine refuses (0A000) a pair whose pinned tables differ. A reload
+ * is applied only to new states; there is no deferral.
+ *
+ * Nulls are skipped before step; a group with no non-null input has no state, and final is
+ * not called, so its result is NULL. Values are by-value scalars in v1 (inputs and
+ * results); one input per aggregate.
+ *
+ * Optional entries are NULL when absent. serialize and deserialize are required when
+ * combine is present, and PARALLEL SAFE is declared only then.
+ * ======================================================================== */
+
+#define KWABI_AGG_BODIES_SYMBOL  "kwabi_aggregate_bodies"
+#define KWABI_AGG_BODIES_VERSION 1
+
+typedef KwabiStatus (*KwabiAggInitFn)(void **state, KwabiError *err, void *arg);
+typedef KwabiStatus (*KwabiAggStepFn)(void *state, uint64_t value, KwabiError *err, void *arg);
+typedef KwabiStatus (*KwabiAggInverseFn)(void *state, uint64_t value, KwabiError *err, void *arg);
+typedef KwabiStatus (*KwabiAggCombineFn)(void *state, const void *other, KwabiError *err, void *arg);
+typedef KwabiStatus (*KwabiAggFinalFn)(const void *state, uint64_t *result, KwabiError *err, void *arg);
+typedef KwabiStatus (*KwabiAggSerializeFn)(const void *state, char *buf, size_t buflen,
+                                           size_t *used, KwabiError *err, void *arg);
+typedef KwabiStatus (*KwabiAggDeserializeFn)(const char *buf, size_t len, void **state,
+                                             KwabiError *err, void *arg);
+
+typedef struct KwabiAggBodies
+{
+    uint32_t    size;                  /* sizeof(KwabiAggBodies) as the library compiled it */
+    uint32_t    version;               /* KWABI_AGG_BODIES_VERSION */
+    KwabiAggInitFn       init;         /* required */
+    KwabiAggStepFn       step;         /* required */
+    KwabiAggFinalFn      final;        /* required */
+    KwabiAggInverseFn    inverse;      /* optional: moving aggregates */
+    KwabiAggCombineFn    combine;      /* optional: partial aggregation */
+    KwabiAggSerializeFn  serialize;    /* required iff combine is set */
+    KwabiAggDeserializeFn deserialize; /* required iff combine is set */
+    void       *arg;
+} KwabiAggBodies;
 
 /* ========================================================================
  * Reloadable hook bodies (appended, still v1)
