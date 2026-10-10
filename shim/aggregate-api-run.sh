@@ -42,4 +42,4 @@ checks=$(grep -c "check .*: t$" "$out" || true)
 fails=$(grep -c "check .*: f$" "$out" || true)
 echo "PG$major: $checks passed, $fails failed"
 grep "check .*: f$" "$out" || true
-[ "$fails" -eq 0 ] && [ "$checks" -ge 14 ]
+[ "$fails" -eq 0 ] && [ "$checks" -ge 16 ]

@@ -161,7 +161,19 @@ BEGIN
     CASE WHEN parallel_sum = 40000200000000 THEN 't' ELSE 'f' END;
 END $$;
 
--- Not covered here, and why: combine refusal across two body images (0A000). The two
--- states would have to come from different images in one aggregation, and a reload only
--- changes what new states use. It is covered at the C level by the same_body() check in
--- group_aggregate.c; a SQL test needs a plan that straddles a reload, which we do not have.
+-- 9. Combine across body images is refused with 0A000, and the same image combines. A
+--    plan cannot be made to straddle a reload deterministically, so the test helper makes
+--    one state under each image and combines them directly (group_aggregate.c). The
+--    control combines two states under the same image, which must succeed.
+CREATE FUNCTION kwabi_agg_combine_test(text, text, text) RETURNS text
+    AS :'bundle', 'kwabi_agg_combine_test' LANGUAGE C STRICT;
+
+-- psql does not substitute :variables inside $$ bodies, so these are plain SELECTs.
+SELECT 'check combine across body images is refused (got ' || r || '): ' ||
+       CASE WHEN r = '0A000|aggregate states from different body versions cannot be combined'
+            THEN 't' ELSE 'f' END
+FROM (SELECT kwabi_agg_combine_test('ksum', :'v1', :'v2') AS r) x;
+
+SELECT 'check combine under one body image succeeds (got ' || r || '): ' ||
+       CASE WHEN r = 'ok' THEN 't' ELSE 'f' END
+FROM (SELECT kwabi_agg_combine_test('ksum', :'v1', :'v1') AS r) x;

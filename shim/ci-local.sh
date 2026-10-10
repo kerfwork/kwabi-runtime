@@ -1132,7 +1132,8 @@ for M in "${MAJORS[@]}"; do
     #
     # The aggregate table through the runtime: serial, parallel (combine, serialize,
     # deserialize), nulls, a moving frame with the inverse, a body error, pinning across
-    # a rebind, and the parallel path after the rebind. The script fails below 14 checks
+    # a rebind, the parallel path after the rebind, and combine refused across two body
+    # images (0A000) with the same image accepted. The script fails below 16 checks
     # or on any failed check.
     echo "  [aggregate-api] bound aggregate bodies against a preloaded cluster"
     OUT=/tmp/kwabi_aggapi_$M.log

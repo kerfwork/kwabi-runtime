@@ -141,7 +141,7 @@ Datum
 kwabi_agg_final(PG_FUNCTION_ARGS)
 {
     KwabiAggState   *st;
-    uint64      result = 0;
+    uint64_t    result = 0;
     KwabiError  err;
     KwabiStatus s;
 
@@ -180,21 +180,17 @@ kwabi_agg_inverse(PG_FUNCTION_ARGS)
 
 /* ---- combine (internal, internal) -> internal: partial aggregation ---- */
 
-PG_FUNCTION_INFO_V1(kwabi_agg_combine);
-Datum
-kwabi_agg_combine(PG_FUNCTION_ARGS)
+/* Merge b into a. Refuses states made under different body images (0A000). */
+static KwabiAggState *
+combine_states(KwabiAggState *a, KwabiAggState *b)
 {
-    KwabiAggState   *a = PG_ARGISNULL(0) ? NULL : (KwabiAggState *) PG_GETARG_POINTER(0);
-    KwabiAggState   *b = PG_ARGISNULL(1) ? NULL : (KwabiAggState *) PG_GETARG_POINTER(1);
     KwabiError  err;
     KwabiStatus s;
 
-    if (a == NULL && b == NULL)
-        PG_RETURN_NULL();
     if (a == NULL)
-        PG_RETURN_POINTER(check_state(b));
+        return check_state(b);
     if (b == NULL)
-        PG_RETURN_POINTER(check_state(a));
+        return check_state(a);
 
     check_state(a);
     check_state(b);
@@ -208,7 +204,83 @@ kwabi_agg_combine(PG_FUNCTION_ARGS)
     kwabi_error_init(&err);
     s = a->pinned.combine(a->state, b->state, &err, a->pinned.arg);
     raise_if_failed(s, &err);
-    PG_RETURN_POINTER(a);
+    return a;
+}
+
+PG_FUNCTION_INFO_V1(kwabi_agg_combine);
+Datum
+kwabi_agg_combine(PG_FUNCTION_ARGS)
+{
+    KwabiAggState   *a = PG_ARGISNULL(0) ? NULL : (KwabiAggState *) PG_GETARG_POINTER(0);
+    KwabiAggState   *b = PG_ARGISNULL(1) ? NULL : (KwabiAggState *) PG_GETARG_POINTER(1);
+
+    if (a == NULL && b == NULL)
+        PG_RETURN_NULL();
+    PG_RETURN_POINTER(combine_states(a, b));
+}
+
+/*
+ * Test helper: a state made under the body at path, bound to name. Binding moves the name,
+ * so a state made before a later bind keeps the table it was made with.
+ */
+static KwabiAggState *
+state_under(const char *name, const char *path)
+{
+    KwabiAggBodies table;
+    KwabiAggState   *st;
+    void       *body_state = NULL;
+    KwabiError  err;
+    KwabiStatus s;
+
+    if (shim_api->hook_bind_extension(name, path) != KWABI_OK)
+        ereport(ERROR, (errmsg("kwabi aggregate test: bind of \"%s\" refused", path)));
+    if (!shim_agg_bodies_lookup(name, &table))
+        ereport(ERROR, (errmsg("kwabi aggregate test: \"%s\" has no aggregate table", name)));
+
+    st = (KwabiAggState *) palloc0(sizeof(KwabiAggState));
+    st->magic = KWABI_AGG_STATE_MAGIC;
+    st->pinned = table;
+    kwabi_error_init(&err);
+    s = table.init(&body_state, &err, table.arg);
+    raise_if_failed(s, &err);
+    st->state = body_state;
+    return st;
+}
+
+/*
+ * Test entry point: make a state under each of two library paths and combine them. Returns
+ * "ok", or "<sqlstate>|<message>" when the combine raised.
+ */
+PG_FUNCTION_INFO_V1(kwabi_agg_combine_test);
+Datum
+kwabi_agg_combine_test(PG_FUNCTION_ARGS)
+{
+    char       *name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+    KwabiAggState   *a = state_under(name, text_to_cstring(PG_GETARG_TEXT_PP(1)));
+    KwabiAggState   *b = state_under(name, text_to_cstring(PG_GETARG_TEXT_PP(2)));
+    MemoryContext oldcxt = CurrentMemoryContext;
+    char       *result = "ok";
+
+    PG_TRY();
+    {
+        combine_states(a, b);
+    }
+    PG_CATCH();
+    {
+        ErrorData  *edata;
+        StringInfoData buf;
+
+        MemoryContextSwitchTo(oldcxt);
+        edata = CopyErrorData();
+        FlushErrorState();
+        initStringInfo(&buf);
+        for (int i = 0; i < 5; i++)
+            appendStringInfoChar(&buf, PGUNSIXBIT(edata->sqlerrcode >> (6 * i)));
+        appendStringInfo(&buf, "|%s", edata->message);
+        result = buf.data;
+    }
+    PG_END_TRY();
+    PG_RETURN_TEXT_P(cstring_to_text(result));
 }
 
 /* ---- serialize (internal) -> bytea: parallel workers send partial states ---- */
