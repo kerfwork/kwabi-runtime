@@ -130,6 +130,10 @@ extern const KwabiV1 *shim_api;
 
 extern void shim_capture_error(void);
 
+/* Report a slot that cannot give a true answer, without raising: the error is left for
+ * the extension to read through error_get / error_code. Defined in group_node.c. */
+extern void shim_unsupported(int sqlerrcode, const char *msg);
+
 /* ── Group init functions ──────────────────────────────────────────────── */
 
 extern void init_group_fmgr(void);

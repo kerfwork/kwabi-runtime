@@ -124,11 +124,14 @@ shim_spinlock_release(void *lock)
     PG_END_TRY();
 }
 
+/* A spinlock records only that it is locked, not who locked it, so "held by me" cannot be
+ * answered. Report that through error_get rather than returning a false that looks real. */
 static bool
 shim_spinlock_held_by_me(void *lock)
 {
-    /* PostgreSQL does not provide a standard way to check if a spinlock
-     * is held by the current process. Return false for now. */
+    (void) lock;
+    shim_unsupported(ERRCODE_FEATURE_NOT_SUPPORTED,
+                     "kwabi: spinlock_held_by_me is not supported; a spinlock does not record its owner");
     return false;
 }
 

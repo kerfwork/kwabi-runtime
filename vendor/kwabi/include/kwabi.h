@@ -823,6 +823,38 @@ typedef struct KwabiV1 {
     void (*memory_context_reset)(KwabiMemoryContext context);
     void (*memory_context_delete)(KwabiMemoryContext context);
 
+    /* ---- Slots with no error channel ----
+     *
+     * A slot that returns void, bool or int has no KwabiStatus to return. When it cannot
+     * give a true answer, the convention is:
+     *
+     *   - it records the reason in the runtime's error buffer and does not raise. Read the
+     *     reason with error_code() (the SQLSTATE) and error_message(). Clear the buffer with
+     *     error_clear() before the call whose result you will check;
+     *   - it returns a value that cannot be mistaken for an answer:
+     *       void  nothing;
+     *       bool  false;
+     *       int   -1, but only where -1 is not itself a valid answer. Where it is, -1 with
+     *             no error set means "no such thing", and -1 with an error set means the
+     *             slot could not answer.
+     *   - the SQLSTATE is 0A000 (FEATURE_NOT_SUPPORTED) when this runtime cannot answer at
+     *     all. Other SQLSTATEs mean a real failure.
+     *
+     * A bool that reads false is not evidence of false. Check error_code() whenever the
+     * answer matters. A successful call does not clear the buffer, so a stale error from an
+     * earlier call can still be there; that is why error_clear() comes first.
+     *
+     * Slots that follow this convention (see shim/group_node.c and shim/group_lock.c):
+     *   spinlock_held_by_me         false, 0A000 always: a spinlock does not record its owner
+     *   walsender_send              0A000 always
+     *   walsender_receive           -1, 0A000 always (0 would mean "no data yet")
+     *   output_plugin_startup       0A000 always
+     *   output_plugin_shutdown      0A000 always
+     *   postmaster_get_child_pid    -1 with 0A000 when track_activities is off; -1 with no
+     *                               error for an id that is not a live backend
+     *   autovacuum_is_running       false with 0A000 when track_activities is off
+     */
+
     /* ---- Error handling ---- */
     void (*ereport)(int errcode, const char *fmt, ...);
     void (*elog)(int elevel, const char *fmt, ...);
@@ -880,6 +912,12 @@ typedef struct KwabiV1 {
     void (*spin_release)(slock_t lock);
 
     /* ---- Postmaster ---- */
+    /* RACE: this reads the backend-status snapshot, which PostgreSQL takes once per
+     * transaction. Two calls in one statement can disagree if a worker starts or exits
+     * between them, and a true answer is already stale when it returns. Do not use it as a
+     * lock or as a guard against starting one. The regression check in
+     * shim/node-tree-api.sql compares it with pg_stat_activity in one statement, which
+     * can flake on a busy runner in the same way. */
     bool (*autovacuum_is_running)(void);
     int (*autovacuum_naptime)(void);
     void (*syslogger_log)(const char *msg);

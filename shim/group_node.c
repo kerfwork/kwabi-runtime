@@ -4,6 +4,10 @@
 #include "optimizer/optimizer.h" /* planner() */
 #include "optimizer/cost.h"
 #include "commands/sequence.h" /* nextval_internal */
+#include "replication/walsender.h" /* am_walsender */
+#include "storage/pmsignal.h"       /* PostmasterIsAlive */
+#include "utils/backend_status.h" /* pgstat_* */
+#include "utils/builtins.h"        /* pg_stat_get_backend_pid */
 
 
 
@@ -293,26 +297,90 @@ shim_planned_stmt_is_utility(KwabiNode stmt)
 static bool
 shim_postmaster_is_alive(void)
 {
-    return true; /* postmaster is alive if backend is running */
+    return PostmasterIsAlive();
 }
 
+/*
+ * The OS pid of the backend with this id, or -1 when there is no such backend. The id is the
+ * one pg_stat_get_backend_idset() returns, so it means what it means in the SQL views. Built
+ * on pg_stat_get_backend_pid, which reads the same status table.
+ */
 static int
 shim_postmaster_get_child_pid(BackendId backend_id)
 {
-    (void) backend_id;
-    return -1; /* shim has no child processes */
+    LOCAL_FCINFO(fcinfo, 1);
+    volatile int pid = -1;
+
+    if (!pgstat_track_activities)
+    {
+        shim_unsupported(ERRCODE_FEATURE_NOT_SUPPORTED,
+                         "kwabi: postmaster_get_child_pid needs track_activities; backend status is not recorded");
+        return -1;
+    }
+
+    InitFunctionCallInfoData(*fcinfo, NULL, 1, InvalidOid, NULL, NULL);
+    fcinfo->args[0].value = Int32GetDatum(backend_id);
+    fcinfo->args[0].isnull = false;
+    PG_TRY();
+    {
+        Datum       d = pg_stat_get_backend_pid(fcinfo);
+
+        if (!fcinfo->isnull)
+            pid = DatumGetInt32(d);
+    }
+    PG_CATCH();
+    {
+        shim_capture_error();
+    }
+    PG_END_TRY();
+    return pid;
 }
 
+/* True when a live autovacuum worker has a status entry. Read from the same snapshot as
+ * pg_stat_activity, so it is as of the start of the transaction.
+ *
+ * RACE: two calls can disagree if a worker starts or exits between them, and the answer is
+ * stale as soon as it returns. Do not use it as a lock. See the note at autovacuum_is_running
+ * in vendor/kwabi/include/kwabi.h. */
 static bool
 shim_autovacuum_is_running(void)
 {
+    int         n;
+
+    if (!pgstat_track_activities)
+    {
+        shim_unsupported(ERRCODE_FEATURE_NOT_SUPPORTED,
+                         "kwabi: autovacuum_is_running needs track_activities; backend status is not recorded");
+        return false;
+    }
+
+    n = pgstat_fetch_stat_numbackends();
+    for (int i = 1; i <= n; i++)
+    {
+        LocalPgBackendStatus *lbe = pgstat_get_local_beentry_by_index(i);
+
+        if (lbe != NULL && lbe->backendStatus.st_procpid > 0 &&
+            lbe->backendStatus.st_backendType == B_AUTOVAC_WORKER)
+            return true;
+    }
     return false;
 }
 
+void
+shim_unsupported(int sqlerrcode, const char *msg)
+{
+    KwabiError  err;
+
+    kwabi_error_init(&err);
+    kwabi_error_set_core(&err, sqlerrcode, KWABI_ERR_RAISED, msg);
+    kwabi_error_set(&err);
+}
+
+/* True only inside a walsender process, which is the one that serves a replica. */
 static bool
 shim_walsender_is_connected(void)
 {
-    return false;
+    return am_walsender;
 }
 
 static void
@@ -320,31 +388,35 @@ shim_walsender_send(const char *data, int len)
 {
     (void) data;
     (void) len;
+    shim_unsupported(ERRCODE_FEATURE_NOT_SUPPORTED,
+                     "kwabi: walsender_send is not supported; sending WAL to a replica needs a walsender");
 }
 
+/* Returns -1, not 0: 0 means "no data yet", and a body polling for data would spin on it. */
 static int
 shim_walsender_receive(char *buf, int len)
 {
     (void) buf;
     (void) len;
-    /* The shim is not a walsender; there is no WAL data to receive.
-     * Return 0 (no data available), consistent with walsender_is_connected
-     * returning false. */
-    return 0;
+    shim_unsupported(ERRCODE_FEATURE_NOT_SUPPORTED,
+                     "kwabi: walsender_receive is not supported; receiving WAL needs a walsender");
+    return -1;
 }
 
 static void
 shim_output_plugin_shutdown(KwabiOutputPluginCallbacks callbacks)
 {
     (void) callbacks;
-    /* The shim is not an output plugin; shutdown is a no-op. */
+    shim_unsupported(ERRCODE_FEATURE_NOT_SUPPORTED,
+                     "kwabi: output_plugin_shutdown is not supported; the shim does not host an output plugin");
 }
 
 static void
 shim_output_plugin_startup(KwabiOutputPluginCallbacks callbacks)
 {
     (void) callbacks;
-    /* The shim is not an output plugin; startup is a no-op. */
+    shim_unsupported(ERRCODE_FEATURE_NOT_SUPPORTED,
+                     "kwabi: output_plugin_startup is not supported; the shim does not host an output plugin");
 }
 
 static double
@@ -415,8 +487,9 @@ shim_autovacuum_naptime(void)
 static void
 shim_syslogger_log(const char *msg)
 {
-    (void) msg;
-    /* The shim is not a syslogger; logging is a no-op. */
+    if (msg == NULL)
+        return;
+    ereport(LOG, (errmsg_internal("%s", msg)));
 }
 
 static void
@@ -643,8 +716,9 @@ kwabi_walsender_send_test(PG_FUNCTION_ARGS)
     if (api->walsender_send == NULL)
         ereport(ERROR, (errmsg("kwabi: walsender_send slot is not wired")));
 
+    api->error_clear();
     api->walsender_send("test", 4);
-    PG_RETURN_BOOL(true);
+    PG_RETURN_BOOL(api->error_code() == ERRCODE_FEATURE_NOT_SUPPORTED);
 }
 
 /*
@@ -714,8 +788,9 @@ kwabi_output_plugin_shutdown_test(PG_FUNCTION_ARGS)
     if (api->output_plugin_shutdown == NULL)
         ereport(ERROR, (errmsg("kwabi: output_plugin_shutdown slot is not wired")));
 
+    api->error_clear();
     api->output_plugin_shutdown(NULL);
-    PG_RETURN_BOOL(true);
+    PG_RETURN_BOOL(api->error_code() == ERRCODE_FEATURE_NOT_SUPPORTED);
 }
 
 /*
@@ -737,8 +812,9 @@ kwabi_output_plugin_startup_test(PG_FUNCTION_ARGS)
     if (api->output_plugin_startup == NULL)
         ereport(ERROR, (errmsg("kwabi: output_plugin_startup slot is not wired")));
 
+    api->error_clear();
     api->output_plugin_startup(NULL);
-    PG_RETURN_BOOL(true);
+    PG_RETURN_BOOL(api->error_code() == ERRCODE_FEATURE_NOT_SUPPORTED);
 }
 
 /*
@@ -924,6 +1000,75 @@ kwabi_syslogger_log_test(PG_FUNCTION_ARGS)
 
     api->syslogger_log("kwabi: syslogger_log test");
     PG_RETURN_BOOL(true);
+}
+
+/*
+ * kwabi_stub_honesty_test() -> text
+ *
+ * The slots that cannot give a true answer must say so. Returns "ok", or the first check
+ * that failed. Covers walsender_is_connected (false in a backend), walsender_send and
+ * walsender_receive (raise FEATURE_NOT_SUPPORTED, receive returns -1), and
+ * spinlock_held_by_me (false, with FEATURE_NOT_SUPPORTED through error_code).
+ */
+PG_FUNCTION_INFO_V1(kwabi_stub_honesty_test);
+
+Datum
+kwabi_stub_honesty_test(PG_FUNCTION_ARGS)
+{
+    const KwabiV1 *api = shim_api;
+    slock_t    *lock;
+    char       *fail = NULL;
+
+    if (api == NULL)
+        ereport(ERROR, (errmsg("kwabi: ABI not initialised")));
+
+    if (api->walsender_is_connected() != am_walsender)
+        fail = "walsender_is_connected disagrees with am_walsender";
+
+    if (fail == NULL)
+    {
+        char        buf[1] = {0};
+
+        api->error_clear();
+        api->walsender_send(buf, 0);
+        if (api->error_code() != ERRCODE_FEATURE_NOT_SUPPORTED)
+            fail = "walsender_send did not report FEATURE_NOT_SUPPORTED";
+    }
+
+    if (fail == NULL)
+    {
+        char        buf[1] = {0};
+
+        api->error_clear();
+        if (api->walsender_receive(buf, 1) != -1)
+            fail = "walsender_receive did not return -1";
+        else if (api->error_code() != ERRCODE_FEATURE_NOT_SUPPORTED)
+            fail = "walsender_receive did not report FEATURE_NOT_SUPPORTED";
+    }
+
+    if (fail == NULL)
+    {
+        lock = (slock_t *) palloc(sizeof(slock_t));
+        memset(lock, 0, sizeof(slock_t));
+        api->error_clear();
+        if (api->spinlock_held_by_me(lock))
+            fail = "spinlock_held_by_me returned true";
+        else if (api->error_code() != ERRCODE_FEATURE_NOT_SUPPORTED)
+            fail = "spinlock_held_by_me did not report FEATURE_NOT_SUPPORTED";
+    }
+
+    PG_RETURN_TEXT_P(cstring_to_text(fail != NULL ? fail : "ok"));
+}
+
+/* kwabi_child_pid_test(int4) -> int4: through the slot, for one backend id. */
+PG_FUNCTION_INFO_V1(kwabi_child_pid_test);
+
+Datum
+kwabi_child_pid_test(PG_FUNCTION_ARGS)
+{
+    if (shim_api == NULL || shim_api->postmaster_get_child_pid == NULL)
+        ereport(ERROR, (errmsg("kwabi: postmaster_get_child_pid slot is not wired")));
+    PG_RETURN_INT32(shim_api->postmaster_get_child_pid(PG_GETARG_INT32(0)));
 }
 
 /*

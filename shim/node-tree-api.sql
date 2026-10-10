@@ -320,13 +320,15 @@ SELECT kwabi_postmaster_is_alive_test() = true AS postmaster_is_alive;
 
 \echo ''
 \echo '=== 15g2. postmaster_get_child_pid ==='
-\echo '   postmaster_get_child_pid must be wired and return -1 (no children in shim)'
+\echo '   postmaster_get_child_pid with no id must be -1 (no backend 0)'
 SELECT kwabi_postmaster_get_child_pid_test() = -1 AS postmaster_get_child_pid;
 
 \echo ''
 \echo '=== 15h. autovacuum_is_running ==='
-\echo '   autovacuum_is_running must be wired and return false'
-SELECT kwabi_autovacuum_is_running_test() = false AS autovacuum_is_running;
+\echo '   autovacuum_is_running must agree with pg_stat_activity in the same statement'
+\echo '   RACE: a worker that starts between the two reads makes this flake; see kwabi.h'
+SELECT kwabi_autovacuum_is_running_test() = EXISTS (
+    SELECT 1 FROM pg_stat_activity WHERE backend_type = 'autovacuum worker') AS autovacuum_is_running;
 
 \echo ''
 \echo '=== 16. THE NEGATIVE CONTROL: a wrong comparison must RAISE ==='
@@ -375,13 +377,13 @@ SELECT kwabi_trigger_desc_test() AS trigger_desc;
 
 \echo ''
 \echo '=== 25. walsender_send ==='
-\echo '   walsender_send must be callable and not crash'
+\echo '   walsender_send must be callable and report FEATURE_NOT_SUPPORTED, not send anything'
 SELECT kwabi_walsender_send_test() AS walsender_send;
 
 \echo ''
 \echo '=== 25b. walsender_receive ==='
-\echo '   walsender_receive must be callable and return 0 (no data in shim)'
-SELECT kwabi_walsender_receive_test() = 0 AS walsender_receive;
+\echo '   walsender_receive must be callable and return -1 (not supported in a backend)'
+SELECT kwabi_walsender_receive_test() = -1 AS walsender_receive;
 
 \echo ''
 \echo '=== 25c. autovacuum_naptime ==='
@@ -390,12 +392,12 @@ SELECT kwabi_autovacuum_naptime_test() >= 0 AS autovacuum_naptime;
 
 \echo ''
 \echo '=== 25c2. output_plugin_shutdown ==='
-\echo '   output_plugin_shutdown must be wired and callable (no-op in shim)'
+\echo '   output_plugin_shutdown must report FEATURE_NOT_SUPPORTED (the shim hosts no output plugin)'
 SELECT kwabi_output_plugin_shutdown_test() = true AS output_plugin_shutdown;
 
 \echo ''
 \echo '=== 25c3. output_plugin_startup ==='
-\echo '   output_plugin_startup must be wired and callable (no-op in shim)'
+\echo '   output_plugin_startup must report FEATURE_NOT_SUPPORTED (the shim hosts no output plugin)'
 SELECT kwabi_output_plugin_startup_test() = true AS output_plugin_startup;
 
 \echo ''
@@ -410,7 +412,7 @@ SELECT kwabi_vacuum_analyze_rel_test() AS vacuum_analyze_rel;
 
 \echo ''
 \echo '=== 25f. syslogger_log ==='
-\echo '   syslogger_log must be wired and callable (no-op in shim)'
+\echo '   syslogger_log must be wired and callable; the message goes to the server log'
 SELECT kwabi_syslogger_log_test() = true AS syslogger_log;
 
 \echo ''
@@ -422,5 +424,21 @@ CREATE FUNCTION kwabi_node_get_list_test()
 SELECT kwabi_node_get_list_test() AS node_get_list;
 
 
+DROP FUNCTION IF EXISTS kwabi_stub_honesty_test();
+CREATE FUNCTION kwabi_stub_honesty_test() RETURNS text
+    AS :'bundle','kwabi_stub_honesty_test' LANGUAGE C;
+
+\echo '=== stub honesty: walsender and spinlock slots report that they cannot answer, instead of a fake answer ==='
+SELECT kwabi_stub_honesty_test() = 'ok' AS stub_honesty;
+
+DROP FUNCTION IF EXISTS kwabi_child_pid_test(int4);
+CREATE FUNCTION kwabi_child_pid_test(int4) RETURNS int4
+    AS :'bundle','kwabi_child_pid_test' LANGUAGE C;
+
+\echo '=== postmaster_get_child_pid: this backend is found by its SQL backend id; an unknown id gives -1 ==='
+SELECT bool_or(kwabi_child_pid_test(b) = pg_backend_pid()) AS child_pid_matches
+  FROM pg_stat_get_backend_idset() AS b
+ WHERE pg_stat_get_backend_pid(b) = pg_backend_pid();
+SELECT kwabi_child_pid_test(999999) = -1 AS child_pid_unknown;
 
 \echo '=== node-tree-api tests complete ==='
