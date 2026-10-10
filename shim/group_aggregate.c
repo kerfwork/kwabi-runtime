@@ -267,8 +267,8 @@ kwabi_agg_deserialize(PG_FUNCTION_ARGS)
     const char *role;
     char       *name;
     KwabiAggBodies table;
-    bytea      *in = PG_GETARG_BYTEA_PP(0);
-    size_t      len = VARSIZE_ANY_EXHDR(in);
+    bytea      *in;
+    size_t      len;
     uint32      version;
     void       *body_state = NULL;
     KwabiAggState   *st;
@@ -278,6 +278,11 @@ kwabi_agg_deserialize(PG_FUNCTION_ARGS)
 
     if (!AggCheckCallContext(fcinfo, &aggctx))
         ereport(ERROR, (errmsg("kwabi aggregate deserialize called outside an aggregate")));
+    /* A parallel worker that saw no rows sends no state, and PostgreSQL passes NULL here. */
+    if (PG_ARGISNULL(0))
+        PG_RETURN_NULL();
+    in = PG_GETARG_BYTEA_PP(0);
+    len = VARSIZE_ANY_EXHDR(in);
     if (len < sizeof(uint32))
         ereport(ERROR, (errmsg("kwabi aggregate state blob is too short")));
 

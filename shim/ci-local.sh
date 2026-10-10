@@ -1128,6 +1128,25 @@ for M in "${MAJORS[@]}"; do
         grep -E "FAIL" "$OUT" | head -5 | sed 's/^/      /'
     fi
 
+    # --- aggregate-api: bound aggregate bodies, preloaded cluster ---------------
+    #
+    # The aggregate table through the runtime: serial, parallel (combine, serialize,
+    # deserialize), nulls, a moving frame with the inverse, a body error, pinning across
+    # a rebind, and the parallel path after the rebind. The script fails below 14 checks
+    # or on any failed check.
+    echo "  [aggregate-api] bound aggregate bodies against a preloaded cluster"
+    OUT=/tmp/kwabi_aggapi_$M.log
+    AA_SCRATCH="${TMPDIR:-/tmp}/kwabi-aggapi-pg$M"
+    mkdir -p "$AA_SCRATCH"
+    if PGBIN="$PGB" DLSUFFIX="$DLSUFFIX" SCRATCH="$AA_SCRATCH" AGG_PORT=$((5540 + M % 100)) \
+        ./aggregate-api-run.sh "$M" >"$OUT" 2>&1; then
+        AA_PASS=$(grep -o "[0-9]* passed" "$OUT" | head -1)
+        record PASS "$M" "aggregate-api green ($AA_PASS)"
+    else
+        record FAIL "$M" "aggregate-api: see $OUT"
+        grep -E "passed, [1-9]|check .*: f$" "$OUT" | head -5 | sed 's/^/      /'
+    fi
+
     # --- executor-api: executor slots through the ABI ----------------------
     #
     # The executor group: start, run, getnext, finish, end. The assertion that
