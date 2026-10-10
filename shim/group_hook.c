@@ -537,6 +537,7 @@ clear_named_position(int i)
 
 /* Type bodies, one per name position, valid when input is set. */
 static KwabiTypeBodies named_types[KWABI_HOOK_NAMED_MAX];
+static KwabiAggBodies named_aggs[KWABI_HOOK_NAMED_MAX];
 
 /*
  * Load the library for one name into its positions. A library may supply hook bodies,
@@ -549,9 +550,11 @@ load_named(int i, const char *path)
     void       *h;
     KwabiHookBodies *(*hook_getter) (void);
     KwabiTypeBodies *(*type_getter) (void);
+    KwabiAggBodies *(*agg_getter) (void);
     bool        (*ext_init) (const KwabiV1 *);
     const KwabiHookBodies *t = NULL;
     const KwabiTypeBodies *tt = NULL;
+    const KwabiAggBodies *at = NULL;
 
     h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (h == NULL)
@@ -561,10 +564,10 @@ load_named(int i, const char *path)
     }
     hook_getter = (KwabiHookBodies *(*) (void)) dlsym(h, KWABI_HOOK_BODIES_SYMBOL);
     type_getter = (KwabiTypeBodies *(*) (void)) dlsym(h, KWABI_TYPE_BODIES_SYMBOL);
-    if (hook_getter == NULL && type_getter == NULL)
+    agg_getter = (KwabiAggBodies *(*) (void)) dlsym(h, KWABI_AGG_BODIES_SYMBOL);
+    if (hook_getter == NULL && type_getter == NULL && agg_getter == NULL)
     {
-        ereport(WARNING, (errmsg("kwabi bind: %s exports neither %s nor %s",
-                                 path, KWABI_HOOK_BODIES_SYMBOL, KWABI_TYPE_BODIES_SYMBOL)));
+        ereport(WARNING, (errmsg("kwabi bind: %s exports no body table", path)));
         return;
     }
     if (hook_getter != NULL)
@@ -584,6 +587,16 @@ load_named(int i, const char *path)
             tt->version != KWABI_TYPE_BODIES_VERSION)
         {
             ereport(WARNING, (errmsg("kwabi bind: %s has an incompatible type table", path)));
+            return;
+        }
+    }
+    if (agg_getter != NULL)
+    {
+        at = agg_getter();
+        if (at == NULL || at->size != sizeof(KwabiAggBodies) ||
+            at->version != KWABI_AGG_BODIES_VERSION)
+        {
+            ereport(WARNING, (errmsg("kwabi bind: %s has an incompatible aggregate table", path)));
             return;
         }
     }
@@ -613,6 +626,7 @@ load_named(int i, const char *path)
         }
     }
     named_types[i] = (tt != NULL) ? *tt : (KwabiTypeBodies) {0};
+    named_aggs[i] = (at != NULL) ? *at : (KwabiAggBodies) {0};
 }
 
 /* Bring this backend up to date with the name table. Called on every hook entry. */
@@ -658,6 +672,7 @@ probe_library(const char *path)
     void       *h;
     void       *hook_getter;
     void       *type_getter;
+    void       *agg_getter;
 
     h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (h == NULL)
@@ -667,7 +682,8 @@ probe_library(const char *path)
     }
     hook_getter = dlsym(h, KWABI_HOOK_BODIES_SYMBOL);
     type_getter = dlsym(h, KWABI_TYPE_BODIES_SYMBOL);
-    if (hook_getter == NULL && type_getter == NULL)
+    agg_getter = dlsym(h, KWABI_AGG_BODIES_SYMBOL);
+    if (hook_getter == NULL && type_getter == NULL && agg_getter == NULL)
     {
         ereport(WARNING, (errmsg("kwabi bind refused: %s exports neither body table", path)));
         return false;
@@ -1375,4 +1391,34 @@ void
 shim_raise_kwabi_error(const KwabiError *err)
 {
     raise_from_error(err);
+}
+
+/*
+ * Aggregate table lookup for the SQL functions in group_aggregate.c. Returns false when
+ * the name is not bound, or is bound to a library with no aggregate table.
+ */
+bool
+shim_agg_bodies_lookup(const char *name, KwabiAggBodies *out)
+{
+    bool        found = false;
+
+    sync_named();
+    if (named_shm == NULL)
+        return false;
+
+    SpinLockAcquire(&named_shm->mutex);
+    for (int i = 0; i < named_shm->nentries; i++)
+    {
+        if (strcmp(named_shm->e[i].name, name) == 0)
+        {
+            if (named_aggs[i].init != NULL)
+            {
+                *out = named_aggs[i];
+                found = true;
+            }
+            break;
+        }
+    }
+    SpinLockRelease(&named_shm->mutex);
+    return found;
 }

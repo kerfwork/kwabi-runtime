@@ -159,6 +159,7 @@ extern void shim_hook_install_reload(void);
 extern bool shim_hook_reload_available(void);
 extern bool shim_type_bodies_lookup(const char *name, KwabiTypeBodies *out);
 extern void shim_raise_kwabi_error(const KwabiError *err);
+extern bool shim_agg_bodies_lookup(const char *name, KwabiAggBodies *out);
 extern void init_group_bgworker(void);
 extern void init_group_slru(void);
 

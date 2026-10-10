@@ -487,6 +487,10 @@ shim_capabilities(void)
     if (shim_hook_reload_available())
         caps |= KWABI_CAP_HOOK_RELOAD;
 
+    /* AGGREGATE needs the name table too, and the aggregate functions in group_aggregate.c. */
+    if (shim_hook_reload_available())
+        caps |= KWABI_CAP_AGGREGATE;
+
     return caps;
 }
 
