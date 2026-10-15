@@ -1050,7 +1050,7 @@ for M in "${MAJORS[@]}"; do
     # ON_ERROR_STOP is off: the negative control raises by design.
     echo "  [transaction-api] transaction accessor against :$PORT"
     OUT=/tmp/kwabi_transaction_$M.log
-    "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
+    KWABI_PSOCK="$PSOCK" KWABI_PORT="$PORT" KWABI_PSQL="$PGB/psql" "$PGB/psql" -h "$PSOCK" -p "$PORT" -v ON_ERROR_STOP=0 \
         -v bundle="kwabi_runtime_pg$M.$DLSUFFIX" \
         -f transaction-api.sql postgres >"$OUT" 2>&1
 
@@ -1061,12 +1061,16 @@ for M in "${MAJORS[@]}"; do
     # The two that carry the meaning.
     TXN_LIFECYCLE=$(grep -A2 'transaction_lifecycle' "$OUT" | grep -cE '^ t')
     TXN_PURE=$(grep -A2 'unassigned_xid_is_zero' "$OUT" | grep -cE '^ t')
+    TXN_STATUS=0
+    for name in status_in_progress status_committed status_rolled_back status_dead_backend status_unknown_future; do
+        TXN_STATUS=$((TXN_STATUS + $(grep -A2 "$name" "$OUT" | grep -cE '^ t')))
+    done
 
     if [ "$TXN_FALSE" -eq 0 ] && [ "$(unexpected_errors "$OUT")" -eq 0 ] && [ "$TXN_CONTROL" -ge 1 ] && \
-       [ "$TXN_LIFECYCLE" -ge 1 ] && [ "$TXN_PURE" -ge 1 ]; then
+       [ "$TXN_LIFECYCLE" -ge 1 ] && [ "$TXN_PURE" -ge 1 ] && [ "$TXN_STATUS" -eq 5 ]; then
         record PASS "$M" "transaction-api green ($TXN_TRUE assertions)"
     else
-        record FAIL "$M" "transaction-api: true=$TXN_TRUE false=$TXN_FALSE control=$TXN_CONTROL lifecycle=$TXN_LIFECYCLE pure=$TXN_PURE"
+        record FAIL "$M" "transaction-api: true=$TXN_TRUE false=$TXN_FALSE control=$TXN_CONTROL lifecycle=$TXN_LIFECYCLE pure=$TXN_PURE status=$TXN_STATUS/5"
         echo "      see $OUT"
     fi
 

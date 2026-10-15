@@ -646,6 +646,12 @@ typedef KwabiStatus (*KwabiProcessUtilityBody)(KwabiNode pstmt, const char *quer
                                                KwabiHookNext next, KwabiError *err,
                                                void *arg);
 
+/* Values transaction_status returns (see KwabiV1). */
+#define KWABI_XACT_IN_PROGRESS 0
+#define KWABI_XACT_COMMITTED   1
+#define KWABI_XACT_ABORTED     2
+#define KWABI_XACT_UNKNOWN     3
+
 typedef struct KwabiV1 {
     uint32_t version;  /* KWABI_VERSION_1 */
 
@@ -1216,6 +1222,18 @@ typedef struct KwabiV1 {
      * KWABI_ERR_BAD_ARG for a NULL or over-long argument, a name table that is
      * full, or a runtime that is not preloaded (see KWABI_CAP_HOOK_RELOAD). */
     KwabiStatus (*hook_bind_extension)(const char *name, const char *path);
+
+    /* ---- Transaction status (appended, still v1) ----
+     * The state of transaction xid, as pg_xact_status reports it, for recovery.
+     *   KWABI_XACT_IN_PROGRESS  running now, in this server
+     *   KWABI_XACT_COMMITTED    committed
+     *   KWABI_XACT_ABORTED      rolled back, or its backend died before it committed
+     *   KWABI_XACT_UNKNOWN      not assigned yet, invalid, or from an earlier xid epoch
+     * A backend that died mid-transaction reads as ABORTED: PostgreSQL writes no
+     * abort record for it, but it is neither running nor committed. This is a pure
+     * read; it does not assign an xid. An xid from an earlier epoch is UNKNOWN,
+     * because its low 32 bits alias a current xid and the answer would be wrong. */
+    int32 (*transaction_status)(int64 xid);
 
 } KwabiV1;
 
