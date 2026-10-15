@@ -487,6 +487,7 @@ pub struct KwabiV1 {
     >,
     pub hook_bind_extension:
         Option<unsafe extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char) -> i32>,
+    pub transaction_status: Option<extern "C" fn(i64) -> i32>,
 }
 
 pub type KwabiExecutorCheckPermsBodyFn = unsafe extern "C" fn(
@@ -1011,6 +1012,16 @@ impl Kwabi {
             .api
             .transaction_get_current_xid
             .expect("transaction_get_current_xid"))()
+    }
+
+    /// The state of transaction `xid`: one of the `KWABI_XACT_*` values in
+    /// kwabi.h (in progress, committed, aborted, unknown). A pure read: it does
+    /// not assign an xid. A backend that died mid-transaction reads as aborted.
+    pub fn transaction_status(&self, xid: i64) -> i32 {
+        (self
+            .api
+            .transaction_status
+            .expect("transaction_status"))(xid)
     }
 
     // ---- GUC ----

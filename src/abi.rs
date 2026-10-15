@@ -482,11 +482,12 @@ pub struct KwabiV1 {
         ) -> c_int,
     >,
     pub hook_bind_extension: Option<unsafe extern "C" fn(*const c_char, *const c_char) -> c_int>,
+    pub transaction_status: Option<unsafe extern "C" fn(i64) -> i32>,
 }
 
 impl KwabiV1 {
     /// Number of fields; asserted against the header by the harness.
-    pub const FIELD_COUNT: usize = 221;
+    pub const FIELD_COUNT: usize = 222;
 }
 
 /// Every slot starts null. An extension MUST test a slot before calling it;
@@ -717,6 +718,7 @@ impl Default for KwabiV1 {
             hook_register_process_utility: None,
             hook_next_process_utility: None,
             hook_bind_extension: None,
+            transaction_status: None,
         }
     }
 }

@@ -1,6 +1,8 @@
 /* group_transaction.c — transaction accessor for the kwabi shim */
 
 #include "shim_internal.h"
+#include "access/transam.h"          /* ReadNextFullTransactionId, TransactionIdDidCommit */
+#include "storage/procarray.h"        /* TransactionIdIsInProgress */
 
 /* ========================================================================
  * Transaction shim functions
@@ -55,10 +57,43 @@ shim_transaction_get_current_xid(void)
     return (int64) GetTopTransactionIdIfAny();
 }
 
+/*
+ * transaction_status — the state of xid, mirroring pg_xact_status.
+ *
+ * ReadNextFullTransactionId bounds the answer: an xid at or past it has not been
+ * assigned, and the answer is UNKNOWN. An xid from an earlier epoch is UNKNOWN too,
+ * because the commit log is keyed by the low 32 bits. Within the current epoch,
+ * an xid that is running (or is this transaction) is IN_PROGRESS; otherwise the
+ * commit log decides COMMITTED or ABORTED. A backend that died without committing
+ * has no commit record, so it reads as ABORTED.
+ */
+int32
+shim_transaction_status(int64 xid)
+{
+    FullTransactionId next = ReadNextFullTransactionId();
+    uint64            full = (uint64) xid;
+    TransactionId     id;
+
+    if (full == 0 || full >= U64FromFullTransactionId(next))
+        return KWABI_XACT_UNKNOWN;
+    if (EpochFromFullTransactionId(next) != (uint32) (full >> 32))
+        return KWABI_XACT_UNKNOWN;
+
+    id = (TransactionId) full;
+    if (!TransactionIdIsValid(id))
+        return KWABI_XACT_UNKNOWN;
+    if (TransactionIdIsCurrentTransactionId(id) || TransactionIdIsInProgress(id))
+        return KWABI_XACT_IN_PROGRESS;
+    if (TransactionIdDidCommit(id))
+        return KWABI_XACT_COMMITTED;
+    return KWABI_XACT_ABORTED;
+}
+
 void
 init_group_transaction(void)
 {
     shim_table.transaction_get_current_xid = shim_transaction_get_current_xid;
+    shim_table.transaction_status = shim_transaction_status;
 }
 
 /* ========================================================================
@@ -83,6 +118,24 @@ kwabi_transaction_xid(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("kwabi: transaction slot is not wired")));
 
     PG_RETURN_INT64(shim_api->transaction_get_current_xid());
+}
+
+/*
+ * kwabi_transaction_status(int8) -> int4
+ *
+ * The status slot straight from the ABI, so the SQL harness can assert on it.
+ */
+PG_FUNCTION_INFO_V1(kwabi_transaction_status);
+
+Datum
+kwabi_transaction_status(PG_FUNCTION_ARGS)
+{
+    int64 xid = PG_GETARG_INT64(0);
+
+    if (shim_api == NULL || shim_api->transaction_status == NULL)
+        ereport(ERROR, (errmsg("kwabi: transaction status slot is not wired")));
+
+    PG_RETURN_INT32(shim_api->transaction_status(xid));
 }
 
 /*

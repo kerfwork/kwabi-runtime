@@ -27,11 +27,16 @@ LOAD :'bundle';
 
 DROP FUNCTION IF EXISTS kwabi_transaction_xid();
 DROP FUNCTION IF EXISTS kwabi_transaction_control();
+DROP FUNCTION IF EXISTS kwabi_transaction_status(int8);
 
 CREATE FUNCTION kwabi_transaction_xid()
     RETURNS int8 AS :'bundle','kwabi_transaction_xid' LANGUAGE C;
 CREATE FUNCTION kwabi_transaction_control()
     RETURNS bool AS :'bundle','kwabi_transaction_control' LANGUAGE C;
+CREATE FUNCTION kwabi_transaction_status(int8)
+    RETURNS int4 AS :'bundle','kwabi_transaction_status' LANGUAGE C;
+DROP TABLE IF EXISTS kwabi_dead_t;
+CREATE TABLE kwabi_dead_t (v int);
 
 \echo ''
 \echo '=== 1. a write inside a transaction assigns an XID, and the accessor sees it ==='
@@ -47,6 +52,39 @@ COMMIT;
 \echo '   GetTopTransactionIdIfAny, not GetCurrentTransactionId -- asking must not'
 \echo '   allocate an XID. A read-only transaction reports 0.'
 SELECT kwabi_transaction_xid() = 0 AS unassigned_xid_is_zero;
+
+\echo ''
+\echo '=== 2b. status of a running transaction is IN_PROGRESS (0) ==='
+BEGIN;
+INSERT INTO kwabi_txn_probe VALUES (2);
+SELECT kwabi_transaction_status(kwabi_transaction_xid()) = 0 AS status_in_progress;
+COMMIT;
+
+\echo ''
+\echo '=== 2c. status of a committed transaction is COMMITTED (1) ==='
+BEGIN;
+INSERT INTO kwabi_txn_probe VALUES (3);
+SELECT kwabi_transaction_xid() AS committed_xid \gset
+COMMIT;
+SELECT kwabi_transaction_status(:committed_xid) = 1 AS status_committed;
+
+\echo ''
+\echo '=== 2d. status of a rolled-back transaction is ABORTED (2) ==='
+BEGIN;
+INSERT INTO kwabi_txn_probe VALUES (4);
+SELECT kwabi_transaction_xid() AS rolled_back_xid \gset
+ROLLBACK;
+SELECT kwabi_transaction_status(:rolled_back_xid) = 2 AS status_rolled_back;
+
+\echo ''
+\echo '=== 2e. a backend killed mid-transaction reads as ABORTED (2) ==='
+\echo '   a second session writes, the server reports its xid, the backend is terminated'
+\set dead_xid `sh transaction-dead-backend.sh`
+SELECT kwabi_transaction_status(:'dead_xid'::int8) = 2 AS status_dead_backend;
+
+\echo ''
+\echo '=== 2f. an xid not yet assigned is UNKNOWN (3); the status is a pure read ==='
+SELECT kwabi_transaction_status(9223372036854775807) = 3 AS status_unknown_future;
 
 \echo ''
 \echo '=== 3. the backend survived all of the above ==='
