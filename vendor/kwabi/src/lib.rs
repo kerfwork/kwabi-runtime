@@ -1018,10 +1018,7 @@ impl Kwabi {
     /// kwabi.h (in progress, committed, aborted, unknown). A pure read: it does
     /// not assign an xid. A backend that died mid-transaction reads as aborted.
     pub fn transaction_status(&self, xid: i64) -> i32 {
-        (self
-            .api
-            .transaction_status
-            .expect("transaction_status"))(xid)
+        (self.api.transaction_status.expect("transaction_status"))(xid)
     }
 
     // ---- GUC ----
