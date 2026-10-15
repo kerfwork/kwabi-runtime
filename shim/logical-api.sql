@@ -20,6 +20,9 @@ DROP FUNCTION IF EXISTS kwabi_2pc_prepared_test();
 DROP FUNCTION IF EXISTS kwabi_2pc_commit_test();
 DROP FUNCTION IF EXISTS kwabi_2pc_rollback_test();
 DROP FUNCTION IF EXISTS kwabi_pgoutput_no_options_test();
+DROP FUNCTION IF EXISTS kwabi_pgoutput_bytes_test(bytea);
+DROP FUNCTION IF EXISTS kwabi_pgoutput_filter_test();
+DROP FUNCTION IF EXISTS kwabi_pgoutput_errors_test();
 DROP FUNCTION IF EXISTS kwabi_logical_upto_test();
 DROP FUNCTION IF EXISTS kwabi_logical_stream_abort_test();
 DROP FUNCTION IF EXISTS kwabi_logical_read_test();
@@ -40,6 +43,12 @@ CREATE FUNCTION kwabi_logical_batch_test()
     RETURNS bool AS :'bundle','kwabi_logical_batch_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_stream_abort_test()
     RETURNS bool AS :'bundle','kwabi_logical_stream_abort_test' LANGUAGE C;
+CREATE FUNCTION kwabi_pgoutput_bytes_test(bytea)
+    RETURNS bool AS :'bundle','kwabi_pgoutput_bytes_test' LANGUAGE C;
+CREATE FUNCTION kwabi_pgoutput_filter_test()
+    RETURNS bool AS :'bundle','kwabi_pgoutput_filter_test' LANGUAGE C;
+CREATE FUNCTION kwabi_pgoutput_errors_test()
+    RETURNS bool AS :'bundle','kwabi_pgoutput_errors_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_upto_test()
     RETURNS bool AS :'bundle','kwabi_logical_upto_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_read_test()
@@ -57,6 +66,8 @@ SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
     WHERE slot_name = 'kwabi_2pc_t';
 SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
     WHERE slot_name = 'kwabi_stream_t';
+SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
+    WHERE slot_name = 'kwabi_filter_t';
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_prepared_xacts WHERE gid IN ('kwabi_2pc', 'kwabi_2pc_rb')) THEN
         EXECUTE 'ROLLBACK PREPARED ''kwabi_2pc''';
@@ -101,6 +112,19 @@ SELECT kwabi_pgoutput_test() AS pgoutput_messages;
 \echo '=== 5. pgoutput without its options raises ==='
 SELECT kwabi_pgoutput_no_options_test() AS pgoutput_no_options;
 
+\echo ''
+\echo '=== 5b. pgoutput bytes equal pg_logical_slot_peek_binary_changes for the same range, message by message ==='
+SELECT kwabi_pgoutput_bytes_test((
+    SELECT coalesce(string_agg(int4send(length(p.data)) || p.data, ''::bytea ORDER BY p.ord), ''::bytea)
+    FROM pg_logical_slot_peek_binary_changes('kwabi_pgo_t', NULL, NULL,
+                                             'proto_version', '1', 'publication_names', 'kwabi_pub')
+         WITH ORDINALITY AS p(lsn, xid, data, ord)
+)) AS pgoutput_bytes;
+
+\echo ''
+\echo '=== 5c. a missing publication raises undefined_object; an unknown option raises by name ==='
+SELECT kwabi_pgoutput_errors_test() AS pgoutput_errors;
+
 -- Two-phase: the slot must be created with twophase before the prepared transaction.
 -- Each statement is its own transaction except the BEGIN block below, which is
 -- the prepared one. Order matters: prepare, commit, then prepare and roll back.
@@ -144,12 +168,30 @@ ROLLBACK TO s1;
 INSERT INTO kwabi_stream_t VALUES (100);
 COMMIT;
 
+\echo ''
+\echo '=== 8b. publication_names filters the stream: only the published table insert appears ==='
+DROP PUBLICATION IF EXISTS kwabi_filter_pub;
+DROP TABLE IF EXISTS kwabi_filter_t;
+DROP TABLE IF EXISTS kwabi_other_t;
+CREATE TABLE kwabi_filter_t (v int);
+CREATE TABLE kwabi_other_t (v int);
+CREATE PUBLICATION kwabi_filter_pub FOR TABLE kwabi_filter_t;
+SELECT pg_create_logical_replication_slot('kwabi_filter_t', 'pgoutput');
+INSERT INTO kwabi_other_t VALUES (1);
+INSERT INTO kwabi_filter_t VALUES (2);
+INSERT INTO kwabi_other_t VALUES (3);
+SELECT kwabi_pgoutput_filter_test() AS pgoutput_filter;
+
 \echo '=== 9. streamed: a rolled-back savepoint changes come before its A and never after; the rest come after ==='
 SELECT kwabi_logical_stream_abort_test() AS logical_stream_abort;
 RESET logical_decoding_work_mem;
 
 -- Teardown runs after every test, including the pgoutput and two-phase ones.
 SELECT pg_drop_replication_slot('kwabi_stream_t');
+SELECT pg_drop_replication_slot('kwabi_filter_t');
+DROP PUBLICATION IF EXISTS kwabi_filter_pub;
+DROP TABLE IF EXISTS kwabi_filter_t;
+DROP TABLE IF EXISTS kwabi_other_t;
 DROP PUBLICATION IF EXISTS kwabi_stream_pub;
 DROP TABLE IF EXISTS kwabi_stream_t;
 SELECT pg_drop_replication_slot('kwabi_2pc_t');

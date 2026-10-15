@@ -15,6 +15,10 @@
 #include "utils/builtins.h"           /* DirectFunctionCall1, text helpers */
 #include "utils/memutils.h"           /* AllocSetContextCreate */
 #include "utils/pg_lsn.h"             /* LSNGetDatum, DatumGetLSN */
+#include "utils/lsyscache.h"         /* get_publication_oid */
+#include "utils/varlena.h"           /* SplitIdentifierString */
+#include "utils/errcodes.h"          /* ERRCODE_INVALID_PARAMETER_VALUE */
+#include "nodes/pg_list.h"           /* List, ListCell */
 
 typedef struct KwabiLogicalRow
 {
@@ -146,6 +150,33 @@ kwabi_logical_peek(KwabiLogicalDecodingImpl *d, const char *const *names,
     PG_END_TRY();
 }
 
+/*
+ * Every name in a publication_names option must be an existing publication.
+ * PostgreSQL itself accepts a missing one and publishes nothing, which a
+ * consumer cannot tell from an empty table, so the shim raises here instead.
+ */
+static void
+kwabi_logical_check_publications(const char *const *names, const char *const *values, int32 noptions)
+{
+    int32 i;
+
+    for (i = 0; i < noptions; i++)
+    {
+        char     *raw;
+        List     *list = NIL;
+        ListCell *lc;
+
+        if (names[i] == NULL || strcmp(names[i], "publication_names") != 0)
+            continue;
+        raw = pstrdup(values[i]);
+        if (!SplitIdentifierString(raw, ',', &list))
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("kwabi: publication_names \"%s\" is not a list of names", values[i])));
+        foreach(lc, list)
+            (void) get_publication_oid((char *) lfirst(lc), false);
+    }
+}
+
 static KwabiLogicalDecodingCtx
 shim_logical_decoding_begin(const char *slot_name, int32 max_changes, int64 upto_lsn,
                             const char *const *option_names, const char *const *option_values,
@@ -176,6 +207,7 @@ shim_logical_decoding_begin(const char *slot_name, int32 max_changes, int64 upto
     d->upto_lsn = upto_lsn;
     MemoryContextSwitchTo(old);
 
+    kwabi_logical_check_publications(option_names, option_values, noptions);
     kwabi_logical_peek(d, option_names, option_values, noptions);
     return (KwabiLogicalDecodingCtx) d;
 }
@@ -664,6 +696,143 @@ kwabi_pgoutput_no_options_test(PG_FUNCTION_ARGS)
     }
     PG_END_TRY();
     PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_pgoutput_bytes_test(expected bytea) -> bool
+ *
+ * The bytes the handle returns are exactly what pg_logical_slot_peek_binary_changes
+ * returns for the same range. The SQL side passes its own peek as a sequence of
+ * 4-byte big-endian lengths, each followed by that message's bytes. Every message
+ * is compared, so a length, a byte, or a count that differs fails the check.
+ */
+PG_FUNCTION_INFO_V1(kwabi_pgoutput_bytes_test);
+
+Datum
+kwabi_pgoutput_bytes_test(PG_FUNCTION_ARGS)
+{
+    static const char *names[] = { "proto_version", "publication_names" };
+    static const char *values[] = { "1", "kwabi_pub" };
+    bytea      *expected = PG_GETARG_BYTEA_PP(0);
+    const unsigned char *want = (const unsigned char *) VARDATA_ANY(expected);
+    Size        left = VARSIZE_ANY_EXHDR(expected);
+    KwabiLogicalDecodingCtx ctx;
+    int64       lsn;
+    int32       xid, len;
+    const char *data;
+    int         seen = 0;
+    bool        ok = true;
+
+    ctx = shim_api->logical_decoding_begin(KWABI_PGOUTPUT_SLOT, 0, 0, names, values, 2);
+    while (ok && shim_api->logical_decoding_read(ctx, &lsn, &xid, &data, &len))
+    {
+        uint32 want_len;
+
+        if (left < 4)
+        {
+            ok = false;
+            break;
+        }
+        want_len = ((uint32) want[0] << 24) | ((uint32) want[1] << 16) |
+                   ((uint32) want[2] << 8) | (uint32) want[3];
+        want += 4;
+        left -= 4;
+        if ((Size) len != want_len || left < want_len ||
+            memcmp(data, want, want_len) != 0)
+            ok = false;
+        want += want_len;
+        left -= want_len;
+        seen++;
+    }
+    shim_api->logical_decoding_end(ctx);
+
+    ok = ok && left == 0 && seen > 0;
+    PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_pgoutput_filter_test() -> bool
+ *
+ * publication_names filters the stream. The SQL fixture inserts one row into a
+ * table in kwabi_filter_pub and two into a table outside it, each in its own
+ * transaction. Only the published insert may appear.
+ */
+#define KWABI_FILTER_SLOT "kwabi_filter_t"
+
+PG_FUNCTION_INFO_V1(kwabi_pgoutput_filter_test);
+
+Datum
+kwabi_pgoutput_filter_test(PG_FUNCTION_ARGS)
+{
+    static const char *names[] = { "proto_version", "publication_names" };
+    static const char *values[] = { "1", "kwabi_filter_pub" };
+    KwabiLogicalDecodingCtx ctx;
+    int64       lsn;
+    int32       xid, len;
+    const char *data;
+    int         inserts = 0;
+
+    ctx = shim_api->logical_decoding_begin(KWABI_FILTER_SLOT, 0, 0, names, values, 2);
+    while (shim_api->logical_decoding_read(ctx, &lsn, &xid, &data, &len))
+    {
+        if (len >= 1 && data[0] == 'I')
+            inserts++;
+    }
+    shim_api->logical_decoding_end(ctx);
+
+    PG_RETURN_BOOL(inserts == 1);
+}
+
+/*
+ * kwabi_pgoutput_errors_test() -> bool
+ *
+ * Two bad inputs raise errors a caller can branch on. A publication that does
+ * not exist raises undefined_object (42704) and names it. An unknown pgoutput
+ * option raises, and the message names the option.
+ */
+PG_FUNCTION_INFO_V1(kwabi_pgoutput_errors_test);
+
+Datum
+kwabi_pgoutput_errors_test(PG_FUNCTION_ARGS)
+{
+    static const char *missing_names[] = { "proto_version", "publication_names" };
+    static const char *missing_values[] = { "1", "kwabi_no_such_pub" };
+    static const char *option_names[] = { "proto_version", "publication_names", "bogus_opt" };
+    static const char *option_values[] = { "1", "kwabi_pub", "1" };
+    bool        missing_ok = false, option_ok = false;
+
+    PG_TRY();
+    {
+        KwabiLogicalDecodingCtx ctx =
+            shim_api->logical_decoding_begin(KWABI_PGOUTPUT_SLOT, 0, 0, missing_names, missing_values, 2);
+        shim_api->logical_decoding_end(ctx);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        missing_ok = (edata->sqlerrcode == ERRCODE_UNDEFINED_OBJECT &&
+                      strstr(edata->message, "kwabi_no_such_pub") != NULL);
+        FreeErrorData(edata);
+        FlushErrorState();
+    }
+    PG_END_TRY();
+
+    PG_TRY();
+    {
+        KwabiLogicalDecodingCtx ctx =
+            shim_api->logical_decoding_begin(KWABI_PGOUTPUT_SLOT, 0, 0, option_names, option_values, 3);
+        shim_api->logical_decoding_end(ctx);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        option_ok = (strstr(edata->message, "bogus_opt") != NULL);
+        FreeErrorData(edata);
+        FlushErrorState();
+    }
+    PG_END_TRY();
+
+    PG_RETURN_BOOL(missing_ok && option_ok);
 }
 
 /*
