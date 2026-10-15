@@ -1335,7 +1335,7 @@ for M in "${MAJORS[@]}"; do
     LC_ALL="en_US.UTF-8" LANG="en_US.UTF-8" \
         "$PGB/initdb" -D "$LOGICAL_DATA" -U "$(whoami)" \
         --encoding=UTF8 --locale=C >/dev/null 2>&1
-    printf "wal_level = logical\nmax_replication_slots = 4\nmax_prepared_transactions = 4\nport = %s\nlisten_addresses = 'localhost'\nunix_socket_directories = '%s'\n" \
+    printf "wal_level = logical\nmax_replication_slots = 8\nmax_prepared_transactions = 4\nport = %s\nlisten_addresses = 'localhost'\nunix_socket_directories = '%s'\n" \
         "$LOGICAL_PORT" "$PSOCK" > "$LOGICAL_DATA/postgresql.auto.conf"
 
     OUT=/tmp/kwabi_logical_$M.log
