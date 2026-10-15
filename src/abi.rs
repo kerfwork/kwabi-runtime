@@ -230,6 +230,7 @@ pub struct KwabiV1 {
         unsafe extern "C" fn(
             *const c_char,
             i32,
+            i64,
             *mut *const c_char,
             *mut *const c_char,
             i32,

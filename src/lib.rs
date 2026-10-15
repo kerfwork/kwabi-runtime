@@ -31,6 +31,7 @@
 
 pub mod abi;
 pub mod firewall;
+pub mod pgoutput;
 
 use abi::KwabiV1;
 use std::os::raw::{c_char, c_int, c_void};

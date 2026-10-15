@@ -420,14 +420,15 @@ impl<'a> Raw<'a> {
         &self,
         a0: *const c_char,
         a1: i32,
-        a2: *const *const c_char,
+        a2: i64,
         a3: *const *const c_char,
-        a4: i32,
+        a4: *const *const c_char,
+        a5: i32,
     ) -> *mut KwabiLogicalDecodingCtx {
         (self
             .api
             .logical_decoding_begin
-            .expect("logical_decoding_begin"))(a0, a1, a2, a3, a4)
+            .expect("logical_decoding_begin"))(a0, a1, a2, a3, a4, a5)
     }
 
     /// Slot `logical_decoding_read`.

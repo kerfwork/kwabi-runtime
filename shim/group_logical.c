@@ -33,6 +33,7 @@ typedef struct KwabiLogicalDecodingImpl
     int              next;          /* index of the next row to read */
     XLogRecPtr       last_lsn;      /* highest LSN read so far; 0 if none */
     int32            max_changes;   /* batch cap; 0 = no cap */
+    int64            upto_lsn;      /* batch end LSN; 0 = no bound */
 } KwabiLogicalDecodingImpl;
 
 /*
@@ -72,9 +73,9 @@ static void
 kwabi_logical_peek(KwabiLogicalDecodingImpl *d, const char *const *names,
                    const char *const *values, int32 noptions)
 {
-    Oid      argtypes[4] = { NAMEOID, INT4OID, TEXTARRAYOID };
-    Datum    args[3];
-    char     nulls[3] = { ' ', ' ', ' ' };
+    Oid      argtypes[5] = { NAMEOID, PG_LSNOID, INT4OID, TEXTARRAYOID };
+    Datum    args[4];
+    char     nulls[4] = { ' ', ' ', ' ', ' ' };
     ArrayType *options;
     MemoryContext old;
     MemoryContext oldcontext = CurrentMemoryContext;
@@ -82,12 +83,15 @@ kwabi_logical_peek(KwabiLogicalDecodingImpl *d, const char *const *names,
     uint64   i;
 
     args[0] = DirectFunctionCall1(namein, CStringGetDatum(d->slot_name));
-    args[1] = Int32GetDatum(d->max_changes);
-    if (d->max_changes == 0)
+    args[1] = LSNGetDatum((XLogRecPtr) d->upto_lsn);
+    if (d->upto_lsn == 0)
         nulls[1] = 'n';
+    args[2] = Int32GetDatum(d->max_changes);
+    if (d->max_changes == 0)
+        nulls[2] = 'n';
     /* Built before SPI connects, in the caller's context: SPI_finish frees the SPI one. */
     options = kwabi_logical_options_array(names, values, noptions);
-    args[2] = PointerGetDatum(options);
+    args[3] = PointerGetDatum(options);
 
     /*
      * The SPI work runs in an internal subtransaction. A PostgreSQL error inside
@@ -101,8 +105,8 @@ kwabi_logical_peek(KwabiLogicalDecodingImpl *d, const char *const *names,
         if (SPI_connect() != SPI_OK_CONNECT)
             ereport(ERROR, (errmsg("kwabi: SPI_connect failed")));
         if (SPI_execute_with_args("SELECT lsn, xid, data FROM "
-                                  "pg_logical_slot_peek_binary_changes($1, NULL, $2, VARIADIC $3)",
-                                  3, argtypes, args, nulls, false, 0) < 0)
+                                  "pg_logical_slot_peek_binary_changes($1, $2, $3, VARIADIC $4)",
+                                  4, argtypes, args, nulls, false, 0) < 0)
             ereport(ERROR, (errmsg("kwabi: peeking changes from slot \"%s\" failed", d->slot_name)));
 
         old = MemoryContextSwitchTo(d->cxt);
@@ -143,7 +147,7 @@ kwabi_logical_peek(KwabiLogicalDecodingImpl *d, const char *const *names,
 }
 
 static KwabiLogicalDecodingCtx
-shim_logical_decoding_begin(const char *slot_name, int32 max_changes,
+shim_logical_decoding_begin(const char *slot_name, int32 max_changes, int64 upto_lsn,
                             const char *const *option_names, const char *const *option_values,
                             int32 noptions)
 {
@@ -159,6 +163,8 @@ shim_logical_decoding_begin(const char *slot_name, int32 max_changes,
         ereport(ERROR, (errmsg("kwabi: logical_decoding_begin needs option arrays for %d options", noptions)));
     if (max_changes < 0)
         ereport(ERROR, (errmsg("kwabi: max_changes must be 0 (no cap) or positive")));
+    if (upto_lsn < 0)
+        ereport(ERROR, (errmsg("kwabi: upto_lsn must be 0 (no bound) or a valid LSN")));
 
     cxt = AllocSetContextCreate(CurrentMemoryContext, "kwabi logical decoding",
                                 ALLOCSET_SMALL_SIZES);
@@ -167,6 +173,7 @@ shim_logical_decoding_begin(const char *slot_name, int32 max_changes,
     d->cxt = cxt;
     strlcpy(d->slot_name, slot_name, NAMEDATALEN);
     d->max_changes = max_changes;
+    d->upto_lsn = upto_lsn;
     MemoryContextSwitchTo(old);
 
     kwabi_logical_peek(d, option_names, option_values, noptions);
@@ -276,6 +283,12 @@ init_group_logical(void)
  */
 #define KWABI_LOGICAL_SLOT "kwabi_logical_t"
 #define KWABI_PGOUTPUT_SLOT "kwabi_pgo_t"
+#define KWABI_STREAM_SLOT "kwabi_stream_t"
+
+/* Rust helpers from src/pgoutput.rs, linked into this bundle. */
+extern void kwabi_pgoutput_observe(bool *in_stream, const unsigned char *msg, size_t len);
+extern int  kwabi_pgoutput_writing_xid(const unsigned char *msg, size_t len, bool in_stream, uint32 *out);
+extern int  kwabi_pgoutput_abort_xids(const unsigned char *msg, size_t len, uint32 *top, uint32 *sub);
 
 /* Count INSERT changes from a text plugin's handle, and track the last LSN and xid. */
 static int
@@ -318,18 +331,172 @@ kwabi_logical_batch_test(PG_FUNCTION_ARGS)
     int         first = 0, second = 0;
     bool        ok;
 
-    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 2, NULL, NULL, 0);
+    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 2, 0, NULL, NULL, 0);
     while (shim_api->logical_decoding_read(ctx, &lsn1, &xid, &data, &len))
         first++;
     shim_api->logical_decoding_end(ctx);
 
-    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 2, NULL, NULL, 0);
+    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 2, 0, NULL, NULL, 0);
     if (shim_api->logical_decoding_read(ctx, &lsn2, &xid, &data, &len))
         second = 1;
     shim_api->logical_decoding_end(ctx);
 
     /* The cap of 2 closed at the first COMMIT: BEGIN, INSERT, COMMIT. */
     ok = (first == 3 && second == 1 && lsn2 != 0);
+    PG_RETURN_BOOL(ok);
+}
+
+/*
+ * kwabi_logical_upto_test() -> bool
+ *
+ * An upto_lsn bound returns whole transactions up to a COMMIT, and nothing past
+ * it. The first transaction's COMMIT LSN comes from a cap-2 batch, which closes
+ * at that COMMIT. A handle bounded there returns the same three rows as the
+ * batch, ending at that LSN, and a second handle with the same bound returns them
+ * again: the range replays. A bound below the first change returns nothing.
+ * Runs before the read test, while the fixture is unconfirmed.
+ */
+PG_FUNCTION_INFO_V1(kwabi_logical_upto_test);
+
+Datum
+kwabi_logical_upto_test(PG_FUNCTION_ARGS)
+{
+    KwabiLogicalDecodingCtx ctx;
+    int64       commit_lsn = 0, bounded_last = 0, replay_last = 0, lsn = 0;
+    int32       xid, len;
+    const char *data;
+    int         first = 0, bounded = 0, replay = 0, below = 0;
+    bool        ok;
+
+    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 2, 0, NULL, NULL, 0);
+    while (shim_api->logical_decoding_read(ctx, &commit_lsn, &xid, &data, &len))
+        first++;
+    shim_api->logical_decoding_end(ctx);
+
+    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 0, commit_lsn, NULL, NULL, 0);
+    while (shim_api->logical_decoding_read(ctx, &bounded_last, &xid, &data, &len))
+        bounded++;
+    shim_api->logical_decoding_end(ctx);
+
+    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 0, commit_lsn, NULL, NULL, 0);
+    while (shim_api->logical_decoding_read(ctx, &replay_last, &xid, &data, &len))
+        replay++;
+    shim_api->logical_decoding_end(ctx);
+
+    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 0, 1, NULL, NULL, 0);
+    while (shim_api->logical_decoding_read(ctx, &lsn, &xid, &data, &len))
+        below++;
+    shim_api->logical_decoding_end(ctx);
+
+    ok = (first == 3 && bounded == 3 && replay == 3 &&
+          bounded_last == commit_lsn && replay_last == commit_lsn && below == 0);
+    PG_RETURN_BOOL(ok);
+}
+
+/*
+ * One pass over a streamed handle, counting the changes that each (sub)xid wrote
+ * before and after the stream abort. The abort is found in the same pass, so the
+ * counts are per message position relative to it.
+ */
+typedef struct KwabiStreamScan
+{
+    uint32 top;
+    uint32 abort_sub;
+    int    aborts;
+    int    abort_at;
+    int    total;
+} KwabiStreamScan;
+
+static void
+kwabi_stream_scan(KwabiStreamScan *scan)
+{
+    KwabiLogicalDecodingCtx ctx;
+    static const char *names[] = { "proto_version", "streaming", "publication_names" };
+    static const char *values[] = { "4", "parallel", "kwabi_stream_pub" };
+    int64       lsn;
+    int32       xid, len;
+    const char *data;
+    bool        in_stream = false;
+
+    memset(scan, 0, sizeof(*scan));
+    ctx = shim_api->logical_decoding_begin(KWABI_STREAM_SLOT, 0, 0, names, values, 3);
+    while (shim_api->logical_decoding_read(ctx, &lsn, &xid, &data, &len))
+    {
+        uint32 top = 0, sub = 0;
+
+        if (scan->total == 0)
+            scan->top = (uint32) xid;
+        if (kwabi_pgoutput_abort_xids((const unsigned char *) data, len, &top, &sub) == 1)
+        {
+            scan->aborts++;
+            scan->abort_sub = sub;
+            scan->abort_at = scan->total;
+        }
+        kwabi_pgoutput_observe(&in_stream, (const unsigned char *) data, len);
+        scan->total++;
+    }
+    shim_api->logical_decoding_end(ctx);
+}
+
+/*
+ * kwabi_logical_stream_abort_test() -> bool
+ *
+ * A streamed transaction with a savepoint rolled back mid-stream. The stream
+ * carries an A message naming the aborted subxid, and the writing xid of every
+ * change is recovered by the Rust helper. The rows the aborted subxid wrote all
+ * come before the abort and none after it, the top-level rows come before it,
+ * and the row written after ROLLBACK TO comes after it under another xid. Runs
+ * the scan twice over the same unconfirmed stream, so the replay is checked too.
+ */
+PG_FUNCTION_INFO_V1(kwabi_logical_stream_abort_test);
+
+Datum
+kwabi_logical_stream_abort_test(PG_FUNCTION_ARGS)
+{
+    KwabiStreamScan first, second;
+    KwabiLogicalDecodingCtx ctx;
+    static const char *names[] = { "proto_version", "streaming", "publication_names" };
+    static const char *values[] = { "4", "parallel", "kwabi_stream_pub" };
+    int64       lsn;
+    int32       xid, len;
+    const char *data;
+    bool        in_stream = false;
+    int         sub_before = 0, sub_after = 0, top_before = 0, other_after = 0, pos = 0;
+    bool        ok;
+
+    kwabi_stream_scan(&first);
+    kwabi_stream_scan(&second);
+    if (first.aborts != 1 || second.aborts != 1 || first.abort_sub != second.abort_sub ||
+        first.abort_sub == first.top || first.total != second.total)
+        PG_RETURN_BOOL(false);
+
+    ctx = shim_api->logical_decoding_begin(KWABI_STREAM_SLOT, 0, 0, names, values, 3);
+    while (shim_api->logical_decoding_read(ctx, &lsn, &xid, &data, &len))
+    {
+        uint32 writer = 0;
+        int    r = kwabi_pgoutput_writing_xid((const unsigned char *) data, len, in_stream, &writer);
+
+        if (r == 1)
+        {
+            if (writer == first.abort_sub)
+            {
+                if (pos < first.abort_at)
+                    sub_before++;
+                else
+                    sub_after++;
+            }
+            else if (writer == first.top && pos < first.abort_at)
+                top_before++;
+            else if (pos > first.abort_at)
+                other_after++;
+        }
+        kwabi_pgoutput_observe(&in_stream, (const unsigned char *) data, len);
+        pos++;
+    }
+    shim_api->logical_decoding_end(ctx);
+
+    ok = (sub_before > 0 && sub_after == 0 && top_before > 0 && other_after > 0 &&
+          first.total == second.total);
     PG_RETURN_BOOL(ok);
 }
 
@@ -357,7 +524,7 @@ kwabi_logical_read_test(PG_FUNCTION_ARGS)
         shim_api->logical_decoding_end == NULL)
         ereport(ERROR, (errmsg("kwabi: logical decoding slots are not wired")));
 
-    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 0, NULL, NULL, 0);
+    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 0, 0, NULL, NULL, 0);
     inserts = kwabi_logical_count_inserts(ctx, &last_lsn, &xid_seen);
 
     PG_TRY();
@@ -396,7 +563,7 @@ kwabi_logical_after_confirm_test(PG_FUNCTION_ARGS)
     bool   xid_seen = false;
     int    inserts;
 
-    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 0, NULL, NULL, 0);
+    ctx = shim_api->logical_decoding_begin(KWABI_LOGICAL_SLOT, 0, 0, NULL, NULL, 0);
     inserts = kwabi_logical_count_inserts(ctx, &last_lsn, &xid_seen);
     shim_api->logical_decoding_end(ctx);
     PG_RETURN_BOOL(inserts == 0);
@@ -417,7 +584,7 @@ kwabi_logical_missing_slot_test(PG_FUNCTION_ARGS)
     PG_TRY();
     {
         KwabiLogicalDecodingCtx ctx =
-            shim_api->logical_decoding_begin("kwabi_no_such_slot", 0, NULL, NULL, 0);
+            shim_api->logical_decoding_begin("kwabi_no_such_slot", 0, 0, NULL, NULL, 0);
         shim_api->logical_decoding_end(ctx);
     }
     PG_CATCH();
@@ -451,7 +618,7 @@ kwabi_pgoutput_test(PG_FUNCTION_ARGS)
     int         begins = 0, inserts = 0, commits = 0, relations = 0;
     bool        ok;
 
-    ctx = shim_api->logical_decoding_begin(KWABI_PGOUTPUT_SLOT, 0, names, values, 2);
+    ctx = shim_api->logical_decoding_begin(KWABI_PGOUTPUT_SLOT, 0, 0, names, values, 2);
     while (shim_api->logical_decoding_read(ctx, &lsn, &xid, &data, &len)) {
         if (len < 1)
             continue;
@@ -485,7 +652,7 @@ kwabi_pgoutput_no_options_test(PG_FUNCTION_ARGS)
     PG_TRY();
     {
         KwabiLogicalDecodingCtx ctx =
-            shim_api->logical_decoding_begin(KWABI_PGOUTPUT_SLOT, 0, NULL, NULL, 0);
+            shim_api->logical_decoding_begin(KWABI_PGOUTPUT_SLOT, 0, 0, NULL, NULL, 0);
         shim_api->logical_decoding_end(ctx);
     }
     PG_CATCH();
@@ -548,7 +715,7 @@ kwabi_2pc_prepared_test(PG_FUNCTION_ARGS)
     int64 last_lsn = 0;
     bool  ok;
 
-    ctx = shim_api->logical_decoding_begin(KWABI_2PC_SLOT, 0, kwabi_2pc_names, kwabi_2pc_values, 3);
+    ctx = shim_api->logical_decoding_begin(KWABI_2PC_SLOT, 0, 0, kwabi_2pc_names, kwabi_2pc_values, 3);
     kwabi_2pc_tags(ctx, &begin_prepare, &inserts, &prepares, &commits, &commit_prepared, &rollback_prepared, &last_lsn);
     shim_api->logical_decoding_end(ctx);
 
@@ -568,7 +735,7 @@ kwabi_2pc_commit_test(PG_FUNCTION_ARGS)
     int64 last_lsn = 0;
     bool  ok;
 
-    ctx = shim_api->logical_decoding_begin(KWABI_2PC_SLOT, 0, kwabi_2pc_names, kwabi_2pc_values, 3);
+    ctx = shim_api->logical_decoding_begin(KWABI_2PC_SLOT, 0, 0, kwabi_2pc_names, kwabi_2pc_values, 3);
     kwabi_2pc_tags(ctx, &begin_prepare, &inserts, &prepares, &commits, &commit_prepared, &rollback_prepared, &last_lsn);
 
     /* Commit is the outcome: K, and never a plain C for a prepared transaction. */
@@ -589,7 +756,7 @@ kwabi_2pc_rollback_test(PG_FUNCTION_ARGS)
     int64 last_lsn = 0;
     bool  ok;
 
-    ctx = shim_api->logical_decoding_begin(KWABI_2PC_SLOT, 0, kwabi_2pc_names, kwabi_2pc_values, 3);
+    ctx = shim_api->logical_decoding_begin(KWABI_2PC_SLOT, 0, 0, kwabi_2pc_names, kwabi_2pc_values, 3);
     kwabi_2pc_tags(ctx, &begin_prepare, &inserts, &prepares, &commits, &commit_prepared, &rollback_prepared, &last_lsn);
     shim_api->logical_decoding_end(ctx);
 

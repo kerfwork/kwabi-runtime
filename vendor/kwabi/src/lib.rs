@@ -136,6 +136,7 @@ pub struct KwabiV1 {
         extern "C" fn(
             *const c_char,
             i32,
+            i64,
             *const *const c_char,
             *const *const c_char,
             i32,
@@ -690,6 +691,7 @@ impl Kwabi {
         &self,
         slot: &str,
         max_changes: i32,
+        upto_lsn: i64,
         options: &[(&str, &str)],
     ) -> LogicalDecodingCtx<'_> {
         let name = std::ffi::CString::new(slot).expect("slot name has no NUL");
@@ -710,6 +712,7 @@ impl Kwabi {
         let handle = begin(
             name.as_ptr(),
             max_changes,
+            upto_lsn,
             name_ptrs.as_ptr(),
             value_ptrs.as_ptr(),
             options.len() as i32,
