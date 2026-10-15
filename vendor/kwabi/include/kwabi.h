@@ -766,6 +766,12 @@ typedef struct KwabiV1 {
      *                            stops only at a transaction boundary once the count
      *                            is reached, so a batch always ends at a COMMIT. A
      *                            transaction larger than the cap is returned whole.
+     *                            upto_lsn bounds the batch (0 = no bound). Only
+     *                            transactions whose COMMIT is at or before upto_lsn
+     *                            are returned, whole, so a batch ends at a COMMIT.
+     *                            A consumer that passes a commit's LSN gets exactly
+     *                            the transactions up to it, and the same range again
+     *                            after a crash, because nothing was confirmed.
      *                            option_names/option_values are the slot's output
      *                            plugin options (noptions pairs), for example
      *                            proto_version and publication_names for pgoutput.
@@ -787,7 +793,7 @@ typedef struct KwabiV1 {
      * starting a new handle per batch. A slot that is never confirmed replays from
      * the same position on every begin, which is the at-least-once guarantee.
      */
-    KwabiLogicalDecodingCtx (*logical_decoding_begin)(const char *slot_name, int32 max_changes, const char *const *option_names, const char *const *option_values, int32 noptions);
+    KwabiLogicalDecodingCtx (*logical_decoding_begin)(const char *slot_name, int32 max_changes, int64 upto_lsn, const char *const *option_names, const char *const *option_values, int32 noptions);
     bool (*logical_decoding_read)(KwabiLogicalDecodingCtx ctx, int64 *lsn, int32 *xid, const char **data, int32 *len);
     void (*logical_decoding_confirm)(KwabiLogicalDecodingCtx ctx, int64 lsn);
     void (*logical_decoding_end)(KwabiLogicalDecodingCtx ctx);

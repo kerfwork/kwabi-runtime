@@ -20,6 +20,8 @@ DROP FUNCTION IF EXISTS kwabi_2pc_prepared_test();
 DROP FUNCTION IF EXISTS kwabi_2pc_commit_test();
 DROP FUNCTION IF EXISTS kwabi_2pc_rollback_test();
 DROP FUNCTION IF EXISTS kwabi_pgoutput_no_options_test();
+DROP FUNCTION IF EXISTS kwabi_logical_upto_test();
+DROP FUNCTION IF EXISTS kwabi_logical_stream_abort_test();
 DROP FUNCTION IF EXISTS kwabi_logical_read_test();
 DROP FUNCTION IF EXISTS kwabi_logical_after_confirm_test();
 DROP FUNCTION IF EXISTS kwabi_logical_missing_slot_test();
@@ -36,6 +38,10 @@ CREATE FUNCTION kwabi_pgoutput_no_options_test()
     RETURNS bool AS :'bundle','kwabi_pgoutput_no_options_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_batch_test()
     RETURNS bool AS :'bundle','kwabi_logical_batch_test' LANGUAGE C;
+CREATE FUNCTION kwabi_logical_stream_abort_test()
+    RETURNS bool AS :'bundle','kwabi_logical_stream_abort_test' LANGUAGE C;
+CREATE FUNCTION kwabi_logical_upto_test()
+    RETURNS bool AS :'bundle','kwabi_logical_upto_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_read_test()
     RETURNS bool AS :'bundle','kwabi_logical_read_test' LANGUAGE C;
 CREATE FUNCTION kwabi_logical_after_confirm_test()
@@ -49,6 +55,8 @@ SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
     WHERE slot_name = 'kwabi_pgo_t';
 SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
     WHERE slot_name = 'kwabi_2pc_t';
+SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
+    WHERE slot_name = 'kwabi_stream_t';
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_prepared_xacts WHERE gid IN ('kwabi_2pc', 'kwabi_2pc_rb')) THEN
         EXECUTE 'ROLLBACK PREPARED ''kwabi_2pc''';
@@ -63,10 +71,15 @@ SELECT pg_create_logical_replication_slot('kwabi_pgo_t', 'pgoutput');
 INSERT INTO kwabi_lg_t VALUES (1);
 INSERT INTO kwabi_lg_t VALUES (2);
 
+
 \echo ''
 \echo ''
 \echo '=== 0. a capped batch returns the cap, and an unconfirmed slot replays it ==='
 SELECT kwabi_logical_batch_test() AS logical_batch;
+
+\echo ''
+\echo '=== 0b. upto_lsn: a bound at the first COMMIT returns that transaction only, and replays ==='
+SELECT kwabi_logical_upto_test() AS logical_upto;
 
 \echo '=== 1. read: two committed inserts, with xids; confirm past the end raises; confirm to the end works ==='
 SELECT kwabi_logical_read_test() AS logical_read;
@@ -112,7 +125,33 @@ ROLLBACK PREPARED 'kwabi_2pc_rb';
 \echo '=== 8. two-phase: ROLLBACK PREPARED arrives as r, after the confirmed position ==='
 SELECT kwabi_2pc_rollback_test() AS twophase_rollback;
 
+\echo ''
+-- A streamed transaction for the stream-abort check, in its own table, publication
+-- and slot so the checks above keep their counts. logical_decoding_work_mem is
+-- lowered for this session, and stays lowered through the check: the decoding
+-- backend is this session, so the peek streams only while it is set.
+DROP PUBLICATION IF EXISTS kwabi_stream_pub;
+DROP TABLE IF EXISTS kwabi_stream_t;
+CREATE TABLE kwabi_stream_t (v int);
+CREATE PUBLICATION kwabi_stream_pub FOR TABLE kwabi_stream_t;
+SELECT pg_create_logical_replication_slot('kwabi_stream_t', 'pgoutput');
+SET logical_decoding_work_mem = '64kB';
+BEGIN;
+INSERT INTO kwabi_stream_t SELECT g FROM generate_series(1, 20000) g;
+SAVEPOINT s1;
+INSERT INTO kwabi_stream_t SELECT g FROM generate_series(100001, 120000) g;
+ROLLBACK TO s1;
+INSERT INTO kwabi_stream_t VALUES (100);
+COMMIT;
+
+\echo '=== 9. streamed: a rolled-back savepoint changes come before its A and never after; the rest come after ==='
+SELECT kwabi_logical_stream_abort_test() AS logical_stream_abort;
+RESET logical_decoding_work_mem;
+
 -- Teardown runs after every test, including the pgoutput and two-phase ones.
+SELECT pg_drop_replication_slot('kwabi_stream_t');
+DROP PUBLICATION IF EXISTS kwabi_stream_pub;
+DROP TABLE IF EXISTS kwabi_stream_t;
 SELECT pg_drop_replication_slot('kwabi_2pc_t');
 SELECT pg_drop_replication_slot('kwabi_logical_t');
 SELECT pg_drop_replication_slot('kwabi_pgo_t');
