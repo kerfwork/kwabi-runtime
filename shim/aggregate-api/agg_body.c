@@ -1,4 +1,9 @@
 /*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/*
  * agg_body.c — a bound aggregate body for aggregate-api.sql.
  *
  * Summing with a scale. Built twice: -DSCALE=1 (v1) and -DSCALE=1000 (v2), so a reload is

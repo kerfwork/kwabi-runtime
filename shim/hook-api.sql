@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 Simon Janes
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+
 -- ========================================================================
 -- hook-api.sql — the executor hook chain through the ABI (kwabi.h "Executor hooks").
 --

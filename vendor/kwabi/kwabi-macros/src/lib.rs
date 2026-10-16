@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Simon Janes
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Attribute macros for the kwabi ABI.
 //!
 //! `#[guarded_body]` makes "must not panic" true by construction. See

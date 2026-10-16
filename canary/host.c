@@ -1,4 +1,9 @@
 /*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/*
  * host.c — proof of operation for the kwabi handoff.
  *
  * Plays the part PostgreSQL will play: it supplies a native function table,

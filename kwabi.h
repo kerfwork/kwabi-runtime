@@ -1,4 +1,9 @@
 /*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/*
  * kwabi.h — kwabi Stable ABI for PostgreSQL
  *
  * This header defines the binary interface between kwabi extensions and the

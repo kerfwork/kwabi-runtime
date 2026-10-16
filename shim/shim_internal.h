@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 #ifndef SHIM_INTERNAL_H
 #define SHIM_INTERNAL_H
 

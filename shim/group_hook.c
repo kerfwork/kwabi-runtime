@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 /* group_hook.c — executor hook chain for the kwabi shim (kwabi.h "Executor hooks").
  *
  * PostgreSQL calls a trampoline as its executor hook. The trampoline runs the

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Simon Janes
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Does `#[guarded_body]` actually contain a panic that would otherwise abort?
 //!
 //! This is the test that matters for the "must not panic" issue. It builds two

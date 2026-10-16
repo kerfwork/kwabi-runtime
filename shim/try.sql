@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 Simon Janes
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+
 -- try.sql — proof for kwabi_try (the error firewall's catching direction).
 --
 -- Run: make try PG=18

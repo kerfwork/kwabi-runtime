@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 Simon Janes
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+
 -- ========================================================================
 -- mem-api.sql — the memory context lifecycle through the ABI.
 --

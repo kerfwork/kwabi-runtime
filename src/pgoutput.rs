@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Simon Janes
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Transaction ids in pgoutput messages, for changes read through the ABI.
 //!
 //! pgoutput (proto_version 4, streaming = parallel) writes the xid of the

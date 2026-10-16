@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 /* group_aggregate.c — SQL-callable aggregate functions for bound aggregate bodies.
  *
  * A library bound under a name exports kwabi_aggregate_bodies() (see KwabiAggBodies in

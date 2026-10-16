@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Simon Janes
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Error firewall: the catching direction.
 //!
 //! PostgreSQL reports errors by `longjmp`. Rust reports failures by unwinding.

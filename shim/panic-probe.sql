@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 Simon Janes
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+
 -- panic-probe.sql — the panic limitation, isolated.
 --
 -- Run SEPARATELY from try.sql: it aborts the backend, which takes down every

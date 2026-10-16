@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 Simon Janes
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+
 -- ========================================================================
 -- node-tree-api.sql — the node tree traversal group through the ABI.
 --

@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 Simon Janes
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+
 -- proof.sql — run the kwabi runtime inside a live PostgreSQL backend.
 --
 -- Version-independent: the bundle, canary and libdir names arrive as psql

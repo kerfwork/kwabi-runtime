@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Simon Janes
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! The uint64 canary's text I/O, as a reloadable type body (kwabi.h "Reloadable type bodies").
 //!
 //! The parsing and arithmetic are the `uint` core (src/uint.rs). This file is the ABI

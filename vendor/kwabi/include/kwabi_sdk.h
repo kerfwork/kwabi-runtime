@@ -1,4 +1,9 @@
 /*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/*
  * kwabi_sdk.h — kwabi C SDK
  *
  * This header provides a C wrapper around the raw kwabi function table.

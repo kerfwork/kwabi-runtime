@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 Simon Janes
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+
 -- probe.sql — measure what PostgreSQL actually leaves behind after a caught ERROR.
 --
 -- Run: make probe PG=18

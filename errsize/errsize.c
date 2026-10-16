@@ -1,4 +1,9 @@
 /*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/*
  * errsize.c — cross-version safety for the error channel.
  *
  * The scenario this proves: an extension built against an older header passes

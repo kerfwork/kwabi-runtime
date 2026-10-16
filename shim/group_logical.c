@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 /* group_logical.c — logical decoding slots for the kwabi shim
  *
  * Reads a logical slot through PostgreSQL's SQL-level decoding functions,

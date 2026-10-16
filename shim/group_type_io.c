@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Simon Janes
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 /* group_type_io.c — SQL-callable text I/O for types whose bodies are reloadable.
  *
  * The bundle exports two C functions, kwabi_type_in and kwabi_type_out. A type named

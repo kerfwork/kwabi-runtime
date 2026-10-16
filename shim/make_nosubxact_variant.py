@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Simon Janes
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 make_nosubxact_variant.py — emit a copy of kwabi_runtime_shim.c with the
 subtransaction calls removed from shim_call_impl.

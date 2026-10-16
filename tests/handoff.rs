@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Simon Janes
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Proof of operation for the kwabi handoff.
 //!
 //! The claim under test is the one the whole project rests on: an extension

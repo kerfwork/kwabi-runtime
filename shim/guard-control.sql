@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 Simon Janes
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+
 -- guard-control.sql — the control for guard-test.sql.
 --
 -- A hand-written `extern "C"` body that panics. This is what the contract

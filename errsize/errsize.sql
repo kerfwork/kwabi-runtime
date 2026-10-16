@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 Simon Janes
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+
 -- errsize.sql — cross-version safety for the structured error channel.
 --
 -- Run: make test PG=18
